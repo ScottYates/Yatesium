@@ -255,6 +255,13 @@ def main():
     if sys.platform != 'win32':
         sys.exit('This script builds on Windows only.')
 
+    # Chromium sources use LF line endings. A patch converted to CRLF by git
+    # (core.autocrlf) does not apply, so catch that before the long checkout.
+    for patch in sorted((ROOT / 'patches').glob('*.patch')):
+        if b'\r\n' in patch.read_bytes():
+            sys.exit('%s has CRLF line endings. Re-clone this repository with '
+                     '"git config core.autocrlf false".' % patch.name)
+
     builder = Builder(args)
     builder.build_dir.mkdir(parents=True, exist_ok=True)
     # autoninja and gclient locate the checkout through this file.
