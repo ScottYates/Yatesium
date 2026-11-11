@@ -94,6 +94,30 @@ class Builder:
                        cwd=str(cwd or self.build_dir), env=self.env,
                        shell=True, check=True)
 
+    def run_with_retries(self, *cmd, cwd=None, cleanup=None, attempts=4):
+        """Runs a network command, retrying after server or network errors."""
+        for attempt in range(1, attempts + 1):
+            try:
+                self.run(*cmd, cwd=cwd)
+                return
+            except subprocess.CalledProcessError:
+                if attempt == attempts:
+                    raise
+                delay = 60 * attempt
+                log('Command failed (attempt %d of %d). Retrying in %d s.' %
+                    (attempt, attempts, delay))
+                if cleanup:
+                    cleanup()
+                time.sleep(delay)
+
+    def remove_tree(self, path):
+        def on_error(func, failed_path, _):
+            os.chmod(failed_path, stat.S_IWRITE)
+            func(failed_path)
+
+        if Path(path).exists():
+            shutil.rmtree(path, onerror=on_error)
+
     def done(self, step):
         marker = self.state / step
         if not marker.exists():
@@ -115,11 +139,12 @@ class Builder:
         if (self.depot_tools / 'gclient.bat').exists():
             return
         log('Getting depot_tools')
-        self.run('git', 'clone', '--depth', '1', DEPOT_TOOLS_URL,
-                 self.depot_tools)
+        self.run_with_retries(
+            'git', 'clone', '--depth', '1', DEPOT_TOOLS_URL, self.depot_tools,
+            cleanup=lambda: self.remove_tree(self.depot_tools))
         # First run downloads depot_tools' own Python and git.
         self.env['DEPOT_TOOLS_UPDATE'] = '1'
-        self.run('gclient.bat', '--version')
+        self.run_with_retries('gclient.bat', '--version')
         self.env['DEPOT_TOOLS_UPDATE'] = '0'
 
     def checkout(self):
@@ -128,11 +153,15 @@ class Builder:
         version = read_version()
         log('Checking out Chromium %s' % version)
         if not (self.src / '.git').exists():
-            self.run('git', 'clone', '--depth', '1', '--branch', version,
-                     CHROMIUM_URL, self.src)
-        self.run('gclient.bat', 'sync', '--no-history', '--nohooks', '-D',
-                 '--jobs', '8')
-        self.run('gclient.bat', 'runhooks')
+            # A failed clone leaves a partial folder behind. Remove it
+            # before trying again.
+            self.run_with_retries(
+                'git', 'clone', '--depth', '1', '--branch', version,
+                CHROMIUM_URL, self.src,
+                cleanup=lambda: self.remove_tree(self.src))
+        self.run_with_retries('gclient.bat', 'sync', '--no-history',
+                              '--nohooks', '-D', '--jobs', '8')
+        self.run_with_retries('gclient.bat', 'runhooks')
         self.mark('checkout')
 
     def apply_changes(self):
@@ -202,14 +231,9 @@ class Builder:
         if self.done('git_removed'):
             return
         log('Removing .git directories to save disk space')
-
-        def on_error(func, path, _):
-            os.chmod(path, stat.S_IWRITE)
-            func(path)
-
         for dirpath, dirnames, _ in os.walk(self.src):
             if '.git' in dirnames:
-                shutil.rmtree(os.path.join(dirpath, '.git'), onerror=on_error)
+                self.remove_tree(os.path.join(dirpath, '.git'))
                 dirnames.remove('.git')
         self.mark('git_removed')
 
