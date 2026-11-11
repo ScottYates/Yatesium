@@ -23,6 +23,7 @@ with C++", the Windows SDK version named in src/build/vs_toolchain.py
 import argparse
 import ctypes
 import os
+import re
 import shutil
 import signal
 import stat
@@ -94,7 +95,15 @@ class Builder:
                        shell=True, check=True)
 
     def done(self, step):
-        return (self.state / step).exists()
+        marker = self.state / step
+        if not marker.exists():
+            return False
+        saved = marker.read_text(encoding='utf-8').strip()
+        if saved != read_version():
+            sys.exit('The build folder holds Chromium %s but chromium_version.txt '
+                     'says %s. Start with an empty build folder.' %
+                     (saved, read_version()))
+        return True
 
     def mark(self, step):
         self.state.mkdir(parents=True, exist_ok=True)
@@ -127,17 +136,48 @@ class Builder:
         self.mark('checkout')
 
     def apply_changes(self):
-        if self.done('patched'):
-            return
         patches = sorted((ROOT / 'patches').glob('*.patch'))
-        log('Checking %d patches' % len(patches))
+        applied_dir = self.state / 'applied_patches'
+        applied = sorted(applied_dir.glob('*.patch'))
+        if (self.done('patched') and
+                [(p.name, p.read_bytes()) for p in patches] ==
+                [(p.name, p.read_bytes()) for p in applied]):
+            return
+
+        # Files any old or new patch touches, with their current time stamp
+        # and content. A file that ends up with the same content gets its
+        # time stamp back, so only real changes are recompiled.
+        touched = {}
+        for patch in applied + patches:
+            for name in re.findall(r'^diff --git a/(\S+) b/',
+                                   patch.read_text(encoding='utf-8'), re.M):
+                path = self.src / name
+                if path.is_file():
+                    touched[path] = (path.stat().st_mtime_ns, path.read_bytes())
+
+        if applied:
+            # The build folder was patched by an earlier run and the patches
+            # have changed since. Take the old ones out, newest first, so the
+            # new set applies to pristine files.
+            log('Patches changed. Reverting the %d applied before.' %
+                len(applied))
+            for patch in reversed(applied):
+                self.run('git', 'apply', '-R', '--whitespace=nowarn', patch,
+                         cwd=self.src)
+                patch.unlink()
+        if (self.state / 'patched').exists():
+            (self.state / 'patched').unlink()
+
+        log('Applying %d patches' % len(patches))
+        applied_dir.mkdir(parents=True, exist_ok=True)
         for patch in patches:
-            self.run('git', 'apply', '--check', '--whitespace=nowarn', patch,
-                     cwd=self.src)
-        for patch in patches:
-            log('Applying ' + patch.name)
             self.run('git', 'apply', '--whitespace=nowarn', patch,
                      cwd=self.src)
+            shutil.copyfile(patch, applied_dir / patch.name)
+
+        for path, (mtime_ns, content) in touched.items():
+            if path.is_file() and path.read_bytes() == content:
+                os.utime(path, ns=(mtime_ns, mtime_ns))
 
         log('Rebranding strings')
         subprocess.run([sys.executable, str(ROOT / 'scripts' / 'rebrand.py'),
@@ -151,9 +191,10 @@ class Builder:
                 if not target.exists():
                     sys.exit('branding/%s has no counterpart in the Chromium '
                              'tree.' % path.relative_to(branding).as_posix())
-                shutil.copyfile(path, target)
-                count += 1
-        log('Copied %d branding files' % count)
+                if target.read_bytes() != path.read_bytes():
+                    shutil.copyfile(path, target)
+                    count += 1
+        log('Updated %d branding files' % count)
         self.mark('patched')
 
     def remove_git_dirs(self):
@@ -228,7 +269,8 @@ class Builder:
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return False
         if code != 0:
-            sys.exit('Compile failed with exit code %d.' % code)
+            log('Compile failed with exit code %d.' % code)
+            sys.exit(1)
         return True
 
     def package(self):

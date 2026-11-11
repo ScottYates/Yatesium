@@ -33,6 +33,11 @@ two there.
    another. A full build takes several stages.
 4. Download the `yatesium-portable` artifact from the finished run.
 
+If a run fails after the Chromium checkout, it still saves its build folder
+for 3 days. To continue from it after pushing a fix, run the workflow again
+and enter the failed run's number (from its URL) in "resume_run_id". Changed
+patches are swapped in and only the affected files are recompiled.
+
 To publish a release instead, push a tag such as `v157.0.8103.79-1`. The same
 workflow runs and attaches the zip to a GitHub release.
 

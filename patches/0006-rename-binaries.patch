@@ -394,3 +394,20 @@ index 1c25647fd..906959f15 100644
    }
  }
  
+diff --git a/chrome/installer/mini_installer/BUILD.gn b/chrome/installer/mini_installer/BUILD.gn
+index df9408bb1..2e5faa30e 100644
+--- a/chrome/installer/mini_installer/BUILD.gn
++++ b/chrome/installer/mini_installer/BUILD.gn
+@@ -149,9 +149,9 @@ action("mini_installer_archive") {
+   release_file = "chrome.release"
+ 
+   inputs = [
+-    "$root_out_dir/chrome.dll",
+-    "$root_out_dir/chrome_elf.dll",
+-    "$root_out_dir/chrome.exe",
++    "$root_out_dir/yatesium.dll",
++    "$root_out_dir/yatesium_elf.dll",
++    "$root_out_dir/yatesium.exe",
+     "$root_out_dir/locales/en-US.pak",
+     "$root_out_dir/setup.exe",
+     "//chrome/tools/build/win/makecab.py",

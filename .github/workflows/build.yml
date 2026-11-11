@@ -9,12 +9,19 @@ name: build
 
 on:
   workflow_dispatch:
+    inputs:
+      resume_run_id:
+        description: Resume from the build folder saved by this earlier run (the number in the run's URL). Leave empty to start fresh.
+        type: string
+        required: false
+        default: ''
   push:
     tags:
       - 'v*'
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: build-${{ github.ref }}
@@ -26,7 +33,8 @@ jobs:
     secrets: inherit
     with:
       finished: 'no'
-      resume: false
+      resume: ${{ inputs.resume_run_id != '' && inputs.resume_run_id != null }}
+      resume_run_id: ${{ inputs.resume_run_id }}
   stage-2:
     needs: stage-1
     uses: ./.github/workflows/stage.yml

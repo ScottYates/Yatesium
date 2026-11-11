@@ -15,6 +15,11 @@ on:
         description: Restore the build folder saved by the previous stage
         type: boolean
         required: true
+      resume_run_id:
+        description: Restore from this earlier workflow run instead of the current one
+        type: string
+        required: false
+        default: ''
     outputs:
       finished:
         description: "'true' if the build is finished after this stage"
@@ -22,6 +27,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   BUILD_DIR: C:\y
@@ -71,6 +77,8 @@ jobs:
         with:
           name: build-state
           path: C:\y-state
+          run-id: ${{ inputs.resume_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Restore saved build folder
         if: inputs.finished != 'true' && inputs.resume
@@ -96,21 +104,29 @@ jobs:
           } elseif ($code -eq 124) {
             "finished=false" >> $env:GITHUB_OUTPUT
           } else {
-            exit $code
+            # Keep going so the build folder is saved. A later run can resume
+            # from it instead of starting over. The job is failed at the end.
+            "finished=failed" >> $env:GITHUB_OUTPUT
           }
           exit 0
 
       - name: Save build folder
-        if: inputs.finished != 'true' && steps.build.outputs.finished == 'false'
+        id: save
+        if: inputs.finished != 'true' && steps.build.outputs.finished != 'true'
         shell: pwsh
         run: |
           Set-Location $env:BUILD_DIR
+          if (-not (Test-Path state\checkout)) {
+            Write-Host "The checkout did not finish. Nothing worth saving."
+            exit 0
+          }
           Remove-Item -Recurse -Force tmp -ErrorAction SilentlyContinue
           7z a -tzip -mx=1 -mtc=on -mmt=on -bso0 C:\state.zip src state
           if ($LASTEXITCODE -gt 1) { throw "Could not archive the build folder." }
+          "saved=true" >> $env:GITHUB_OUTPUT
 
       - name: Upload saved build folder
-        if: inputs.finished != 'true' && steps.build.outputs.finished == 'false'
+        if: steps.save.outputs.saved == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: build-state
@@ -128,3 +144,10 @@ jobs:
           retention-days: 30
           compression-level: 0
           if-no-files-found: error
+
+      - name: Fail the job if the build failed
+        if: inputs.finished != 'true' && steps.build.outputs.finished == 'failed'
+        shell: pwsh
+        run: |
+          Write-Host "The build step failed. See its log above."
+          exit 1
