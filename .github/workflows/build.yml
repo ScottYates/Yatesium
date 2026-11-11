@@ -1,0 +1,133 @@
+# Builds the Yatesium portable zip for Windows x64.
+#
+# Start it from the Actions tab ("Run workflow"), or push a tag named v*.
+# A run started from a tag also publishes the zip as a GitHub release.
+#
+# The repository must be public: the build uses far more runner time and
+# artifact storage than the free allowance for private repositories.
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  stage-1:
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: 'no'
+      resume: false
+  stage-2:
+    needs: stage-1
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-1.outputs.finished }}
+      resume: true
+  stage-3:
+    needs: stage-2
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-2.outputs.finished }}
+      resume: true
+  stage-4:
+    needs: stage-3
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-3.outputs.finished }}
+      resume: true
+  stage-5:
+    needs: stage-4
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-4.outputs.finished }}
+      resume: true
+  stage-6:
+    needs: stage-5
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-5.outputs.finished }}
+      resume: true
+  stage-7:
+    needs: stage-6
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-6.outputs.finished }}
+      resume: true
+  stage-8:
+    needs: stage-7
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-7.outputs.finished }}
+      resume: true
+  stage-9:
+    needs: stage-8
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-8.outputs.finished }}
+      resume: true
+  stage-10:
+    needs: stage-9
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-9.outputs.finished }}
+      resume: true
+  stage-11:
+    needs: stage-10
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-10.outputs.finished }}
+      resume: true
+  stage-12:
+    needs: stage-11
+    uses: ./.github/workflows/stage.yml
+    secrets: inherit
+    with:
+      finished: ${{ needs.stage-11.outputs.finished }}
+      resume: true
+  release:
+    needs: stage-12
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check that the build finished
+        env:
+          FINISHED: ${{ needs.stage-12.outputs.finished }}
+        run: |
+          if [ "$FINISHED" != "true" ]; then
+            echo "The build did not finish within 12 stages."
+            exit 1
+          fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: yatesium-portable
+          path: dist
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Yatesium ${GITHUB_REF_NAME#v}" \
+            --notes "Portable build for Windows x64. Extract the zip and run chrome.exe."

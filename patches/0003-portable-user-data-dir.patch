@@ -1,0 +1,105 @@
+diff --git a/chrome/browser/prefs/chrome_pref_service_factory.cc b/chrome/browser/prefs/chrome_pref_service_factory.cc
+index cd4f964e..df77367c 100644
+--- a/chrome/browser/prefs/chrome_pref_service_factory.cc
++++ b/chrome/browser/prefs/chrome_pref_service_factory.cc
+@@ -226,7 +226,10 @@ SettingsEnforcementGroup GetSettingsEnforcementGroup() {
+   // update the OFFICIAL_BUILD section of extension_startup_browsertest.cc and
+   // pref_hash_browsertest.cc when updating the default value below.
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+-  return GROUP_ENFORCE_DEFAULT;
++  // Yatesium: protected-preference hashes are tied to the machine. Enforcing
++  // them would reset settings and remove extensions whenever the portable
++  // folder is moved to another computer, so enforcement is off.
++  return GROUP_NO_ENFORCEMENT;
+ #else
+   return GROUP_NO_ENFORCEMENT;
+ #endif
+diff --git a/chrome/common/chrome_paths_win.cc b/chrome/common/chrome_paths_win.cc
+index 9ab34278..1b744bb7 100644
+--- a/chrome/common/chrome_paths_win.cc
++++ b/chrome/common/chrome_paths_win.cc
+@@ -9,6 +9,7 @@
+ #include <shlobj.h>
+ 
+ #include "base/files/file_path.h"
++#include "base/files/file_util.h"
+ #include "base/path_service.h"
+ #include "base/win/scoped_co_mem.h"
+ #include "chrome/common/chrome_constants.h"
+@@ -40,6 +41,19 @@ bool GetUserDirectory(int csidl_folder, base::FilePath* result) {
+ }  // namespace
+ 
+ bool GetDefaultUserDataDirectory(base::FilePath* result) {
++  // Yatesium: portable mode. Must match
++  // install_static::GetDefaultUserDataDirectory() in
++  // chrome/install_static/user_data_dir.cc.
++  base::FilePath exe_dir;
++  if (base::PathService::Get(base::DIR_EXE, &exe_dir)) {
++    base::FilePath portable_dir =
++        exe_dir.Append(L"Data").Append(chrome::kUserDataDirname);
++    if (base::CreateDirectory(portable_dir)) {
++      *result = portable_dir;
++      return true;
++    }
++  }
++
+   if (!base::PathService::Get(base::DIR_LOCAL_APP_DATA, result))
+     return false;
+   *result = result->Append(install_static::GetChromeInstallSubDirectory());
+diff --git a/chrome/install_static/user_data_dir.cc b/chrome/install_static/user_data_dir.cc
+index 6b231841..432af9b4 100644
+--- a/chrome/install_static/user_data_dir.cc
++++ b/chrome/install_static/user_data_dir.cc
+@@ -71,6 +71,34 @@ bool GetUserDataDirectoryUsingProcessCommandLine(
+                                   invalid_supplied_directory);
+ }
+ 
++// Yatesium: populates |result| with "<directory of the exe>\Data\User Data".
++bool GetPortableUserDataDirectory(std::wstring* result) {
++  std::wstring exe_path(MAX_PATH, L'\0');
++  for (;;) {
++    DWORD length = ::GetModuleFileNameW(
++        nullptr, &exe_path[0], static_cast<DWORD>(exe_path.size()));
++    if (!length) {
++      return false;
++    }
++    if (length < exe_path.size()) {
++      exe_path.resize(length);
++      break;
++    }
++    if (exe_path.size() >= 32768) {
++      return false;
++    }
++    exe_path.resize(exe_path.size() * 2);
++  }
++  const size_t last_separator = exe_path.find_last_of(L"\\/");
++  if (last_separator == std::wstring::npos) {
++    return false;
++  }
++  exe_path.resize(last_separator);
++  exe_path.append(L"\\Data\\User Data");
++  result->swap(exe_path);
++  return true;
++}
++
+ // Populates |result| with the default User Data directory for the current
+ // user. Returns false if all attempts at locating a User Data directory fail.
+ // TODO(ananta)
+@@ -78,6 +106,17 @@ bool GetUserDataDirectoryUsingProcessCommandLine(
+ // Unify this with the Browser Distribution code.
+ bool GetDefaultUserDataDirectory(const InstallConstants& mode,
+                                  std::wstring* result) {
++  // Yatesium: portable mode. The profile lives in "Data\User Data" next to
++  // the executable, and is created if it does not exist. The upstream
++  // per-user location below is only used if that folder cannot be created
++  // (for example when running from read-only media).
++  std::wstring portable_dir;
++  if (GetPortableUserDataDirectory(&portable_dir) &&
++      RecursiveDirectoryCreate(portable_dir)) {
++    result->swap(portable_dir);
++    return true;
++  }
++
+   // This environment variable should be set on Windows Vista and later
+   // (https://msdn.microsoft.com/library/windows/desktop/dd378457.aspx).
+   std::wstring user_data_dir = GetEnvironmentString(L"LOCALAPPDATA");

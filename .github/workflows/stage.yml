@@ -1,0 +1,130 @@
+# One build stage. A hosted runner job may run for at most 6 hours and a full
+# Chromium compile takes longer, so the build is split into stages. Each stage
+# restores the previous stage's build folder, compiles for a fixed time, and
+# saves the folder again. build.yml chains the stages.
+name: stage
+
+on:
+  workflow_call:
+    inputs:
+      finished:
+        description: "'true' once an earlier stage has finished the build"
+        type: string
+        required: true
+      resume:
+        description: Restore the build folder saved by the previous stage
+        type: boolean
+        required: true
+    outputs:
+      finished:
+        description: "'true' if the build is finished after this stage"
+        value: ${{ jobs.stage.outputs.finished }}
+
+permissions:
+  contents: read
+
+env:
+  BUILD_DIR: C:\y
+  # Must match SDK_VERSION in Chromium's build/vs_toolchain.py.
+  WINDOWS_SDK: 10.0.28000.0
+
+jobs:
+  stage:
+    runs-on: windows-2022
+    timeout-minutes: 355
+    outputs:
+      finished: ${{ inputs.finished == 'true' && 'true' || steps.build.outputs.finished }}
+    steps:
+      - name: Record start time
+        if: inputs.finished != 'true'
+        shell: pwsh
+        run: |
+          "START_TIME=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" >> $env:GITHUB_ENV
+
+      - uses: actions/checkout@v7
+        if: inputs.finished != 'true'
+
+      - uses: actions/setup-python@v7
+        if: inputs.finished != 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install Windows SDK
+        if: inputs.finished != 'true'
+        shell: pwsh
+        run: |
+          $include = "C:\Program Files (x86)\Windows Kits\10\Include\$env:WINDOWS_SDK"
+          if (Test-Path $include) {
+            Write-Host "Windows SDK $env:WINDOWS_SDK is already installed."
+            exit 0
+          }
+          $installer = "$env:RUNNER_TEMP\winsdksetup.exe"
+          Invoke-WebRequest -Uri 'https://download.microsoft.com/download/38ab8f6d-3676-4860-ae84-3361308b9d7f/KIT_BUNDLE_WINDOWSSDK_MEDIACREATION/winsdksetup.exe' -OutFile $installer
+          $features = '/features OptionId.DesktopCPPx64 OptionId.DesktopCPPx86 OptionId.WindowsDesktopDebuggers OptionId.UWPCPP OptionId.SigningTools /q /norestart /ceip off'
+          $proc = Start-Process -FilePath $installer -ArgumentList $features -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "winsdksetup.exe failed with code $($proc.ExitCode)" }
+          if (-not (Test-Path $include)) { throw "Windows SDK $env:WINDOWS_SDK not found after install." }
+
+      - name: Download saved build folder
+        if: inputs.finished != 'true' && inputs.resume
+        uses: actions/download-artifact@v8
+        with:
+          name: build-state
+          path: C:\y-state
+
+      - name: Restore saved build folder
+        if: inputs.finished != 'true' && inputs.resume
+        shell: pwsh
+        run: |
+          7z x C:\y-state\state.zip "-o$env:BUILD_DIR" -y -bso0
+          if ($LASTEXITCODE -ne 0) { throw "Could not extract the saved build folder." }
+          Remove-Item -Recurse -Force C:\y-state
+
+      - name: Build
+        id: build
+        if: inputs.finished != 'true'
+        shell: pwsh
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_DEFAULT_CLIENT_ID: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
+          GOOGLE_DEFAULT_CLIENT_SECRET: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+        run: |
+          python build.py --ci --build-dir $env:BUILD_DIR --start-time $env:START_TIME --stop-after-minutes 210
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
+            "finished=true" >> $env:GITHUB_OUTPUT
+          } elseif ($code -eq 124) {
+            "finished=false" >> $env:GITHUB_OUTPUT
+          } else {
+            exit $code
+          }
+          exit 0
+
+      - name: Save build folder
+        if: inputs.finished != 'true' && steps.build.outputs.finished == 'false'
+        shell: pwsh
+        run: |
+          Set-Location $env:BUILD_DIR
+          Remove-Item -Recurse -Force tmp -ErrorAction SilentlyContinue
+          7z a -tzip -mx=1 -mtc=on -mmt=on -bso0 C:\state.zip src state
+          if ($LASTEXITCODE -gt 1) { throw "Could not archive the build folder." }
+
+      - name: Upload saved build folder
+        if: inputs.finished != 'true' && steps.build.outputs.finished == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-state
+          path: C:\state.zip
+          overwrite: true
+          retention-days: 3
+          compression-level: 0
+
+      - name: Upload portable zip
+        if: inputs.finished != 'true' && steps.build.outputs.finished == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: yatesium-portable
+          path: C:\y\dist\*.zip
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error

@@ -1,0 +1,66 @@
+# Checks once a week for a new stable Chromium release for Windows. If there
+# is one and the Yatesium patches still apply to it, this commits the new
+# version number, tags it and starts the build. If the patches no longer
+# apply, the run fails and nothing is changed.
+name: update
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 9 * * 3'
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Find the latest stable Chromium
+        id: latest
+        run: |
+          latest=$(curl -fsS 'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Windows&num=1' | jq -r '.[0].version')
+          if ! [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected version string: $latest"
+            exit 1
+          fi
+          current=$(cat chromium_version.txt)
+          echo "current=$current latest=$latest"
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+          if [ "$latest" = "$current" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check that the patches apply
+        if: steps.latest.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.latest.outputs.version }}
+        run: python scripts/check_patches.py "$VERSION"
+
+      - name: Commit, tag and start the build
+        if: steps.latest.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.latest.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$VERSION" > chromium_version.txt
+          echo 1 > revision.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Update to Chromium $VERSION"
+          git tag "v$VERSION-1"
+          git push origin HEAD "v$VERSION-1"
+          gh workflow run build.yml --ref "v$VERSION-1"

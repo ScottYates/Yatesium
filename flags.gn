@@ -1,0 +1,19 @@
+# GN build arguments for Yatesium (Windows x64 release build).
+
+target_cpu = "x64"
+is_official_build = true
+is_debug = false
+is_component_build = false
+
+# No debug symbols: smaller output and a much faster link.
+symbol_level = 0
+blink_symbol_level = 0
+v8_symbol_level = 0
+
+# H.264, AAC and other common media formats.
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+
+# Yatesium patches are small, but a new compiler warning should not fail a
+# multi-hour build.
+treat_warnings_as_errors = false

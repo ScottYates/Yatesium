@@ -1,0 +1,68 @@
+diff --git a/extensions/browser/manifest_v2_handler.cc b/extensions/browser/manifest_v2_handler.cc
+index 5841d3df..d6d412d3 100644
+--- a/extensions/browser/manifest_v2_handler.cc
++++ b/extensions/browser/manifest_v2_handler.cc
+@@ -114,7 +114,8 @@ bool ShouldDisableLegacyExtensions() {
+     return false;
+   }
+ 
+-  return true;
++  // Yatesium: never disable Manifest V2 extensions.
++  return false;
+ }
+ 
+ }  // namespace
+diff --git a/extensions/browser/manifest_v2_util.cc b/extensions/browser/manifest_v2_util.cc
+index 08d7786b..0845798a 100644
+--- a/extensions/browser/manifest_v2_util.cc
++++ b/extensions/browser/manifest_v2_util.cc
+@@ -20,28 +20,9 @@ bool IsExtensionAffected(const Extension& extension) {
+ bool IsExtensionAffected(int manifest_version,
+                          Manifest::Type manifest_type,
+                          mojom::ManifestLocation manifest_location) {
+-  // Only extensions < MV3.
+-  if (manifest_version >= 3) {
+-    return false;
+-  }
+-
+-  // Only extensions (not platform apps, etc). User scripts are treated as
+-  // extensions for the sake of APIs and in presentation to the user, so we
+-  // include them here.
+-  if (manifest_type != Manifest::Type::kExtension &&
+-      manifest_type != Manifest::Type::kLoginScreenExtension &&
+-      manifest_type != Manifest::Type::kUserScript) {
+-    return false;
+-  }
+-
+-  // Ignore component extensions (they're implementation details of Chrome).
+-  if (Manifest::IsComponentLocation(manifest_location)) {
+-    return false;
+-  }
+-
+-  // The extension is an MV2 (or lower) extension; we should warn the user
+-  // about it.
+-  return true;
++  // Yatesium: Manifest V2 is supported, so no extension is affected by the
++  // upstream MV2 deprecation. Nothing is blocked, disabled or flagged.
++  return false;
+ }
+ 
+ }  // namespace extensions::manifest_v2_util
+diff --git a/extensions/common/extension.cc b/extensions/common/extension.cc
+index 28a3cac3..19e6a892 100644
+--- a/extensions/common/extension.cc
++++ b/extensions/common/extension.cc
+@@ -97,12 +97,7 @@ bool IsManifestSupported(int manifest_version,
+   // Supported versions are always safe.
+   if (manifest_version >= kMinimumSupportedManifestVersion &&
+       manifest_version <= kMaximumSupportedManifestVersion) {
+-    // Emit a warning for unpacked extensions on Manifest V2 warning that
+-    // MV2 is deprecated.
+-    if (type == Manifest::Type::kExtension && manifest_version == 2 &&
+-        Manifest::IsUnpackedLocation(location)) {
+-      *warning = errors::kManifestV2IsDeprecatedWarning;
+-    }
++    // Yatesium: Manifest V2 is supported, so no deprecation warning.
+     return true;
+   }
+ 
