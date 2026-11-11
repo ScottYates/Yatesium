@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Rename the product from Chromium to Yatesium in UI strings.
+"""Renames the product to Yatesium in UI strings.
 
 Usage: rebrand.py <chromium src dir> [--name Yatesium]
 
-Edits the product-name string files in place. Translation files (.xtb) are
+Edits the string files (.grd, .grdp) in place. Translation files (.xtb) are
 keyed by a hash of the English text, so after the English text changes this
 script recomputes the IDs with grit (from the source tree) and rewrites the
 .xtb files. Translations are kept for every language.
+
+Left unchanged on purpose:
+  - the copyright and open-source credit lines on the About page,
+  - names of other products (ChromeOS, Chromebook, Chromecast, ChromeVox,
+    Chrome Remote Desktop, Chrome Enterprise, Chrome for Testing).
 
 The script is idempotent: a second run finds nothing to replace.
 """
@@ -16,25 +21,36 @@ import re
 import sys
 from pathlib import Path
 
-# (grd file that grit parses, files whose text is edited, glob of .xtb files)
+# (grd file, glob of its .xtb files). Files pulled in with <part> are found
+# automatically.
 STRING_SETS = (
     ('chrome/app/chromium_strings.grd',
-     ('chrome/app/chromium_strings.grd',
-      'chrome/app/settings_chromium_strings.grdp'),
      'chrome/app/resources/chromium_strings_*.xtb'),
+    ('chrome/app/generated_resources.grd',
+     'chrome/app/resources/generated_resources_*.xtb'),
     ('components/components_chromium_strings.grd',
-     ('components/components_chromium_strings.grd',),
      'components/strings/components_chromium_strings_*.xtb'),
+    ('components/components_strings.grd',
+     'components/strings/components_strings_*.xtb'),
     ('extensions/strings/extensions_strings.grd',
-     ('extensions/strings/extensions_chromium_strings.grdp',),
      'extensions/strings/extensions_strings_*.xtb'),
 )
 
-# "Chromium" as a product name. Left alone: "Chromium OS"/"ChromiumOS",
-# "The Chromium Authors", "Chromium open source project" and compound
-# identifiers such as "ChromiumUpdater".
+# The store keeps working but is no longer named after another browser.
+STORE_RE = re.compile(r'(?:Google )?Chrome Web Store')
+
+# "Chrome", "Google Chrome" or "Chromium" used as the name of this browser.
 PRODUCT_RE = re.compile(
-    r'Chromium(?![A-Za-z])(?!\s?OS\b)(?!\sAuthors)(?!\sopen[ -]source)')
+    r'(?:Google )?Chrom(?:e|ium)'
+    r'(?![A-Za-z])'                        # ChromeOS, Chromebook, ChromeVox...
+    r'(?!\s?OS\b)'                         # Chrome OS, Chromium OS
+    r'(?!\sAuthors)'                       # copyright holder
+    r'(?!\sopen[ -]source)'                # credit line
+    r'(?!<ph name="END_LINK_CHROMIUM")'    # credit link to the project
+    r'(?!\s(?:Remote Desktop|Enterprise|for Testing))')
+
+PART_RE = re.compile(r'<part\s+file="([^"]+)"')
+ID_RE = re.compile(r'(<translation id=")(\d+)(")')
 
 
 class _AnyDefines(dict):
@@ -68,12 +84,32 @@ def message_ids(src, grd):
     return ids
 
 
+def text_files(src, grd):
+    """Returns |grd| and every file it includes with <part>, recursively."""
+    found = []
+    pending = [src / grd]
+    while pending:
+        path = pending.pop()
+        if path in found:
+            continue
+        found.append(path)
+        for part in PART_RE.findall(path.read_text(encoding='utf-8')):
+            pending.append((path.parent / part).resolve())
+    return found
+
+
+def rename(text, name):
+    return PRODUCT_RE.sub(name, STORE_RE.sub('Web Store', text))
+
+
 def replace_in_file(path, name):
     text = path.read_text(encoding='utf-8')
-    new_text, count = PRODUCT_RE.subn(name, text)
-    if count:
-        path.write_bytes(new_text.encode('utf-8'))
-    return count
+    new_text = rename(text, name)
+    if new_text == text:
+        return 0
+    path.write_bytes(new_text.encode('utf-8'))
+    return len(STORE_RE.findall(text)) + len(
+        PRODUCT_RE.findall(STORE_RE.sub('Web Store', text)))
 
 
 def main():
@@ -87,18 +123,23 @@ def main():
 
     sys.path.insert(0, str(src / 'tools' / 'grit'))
 
-    for grd, text_files, xtb_glob in STRING_SETS:
+    for grd, xtb_glob in STRING_SETS:
         before = message_ids(src, grd)
-        replaced = sum(replace_in_file(src / f, args.name) for f in text_files)
+        replaced = sum(replace_in_file(path, args.name)
+                       for path in text_files(src, grd))
         after = message_ids(src, grd)
         if len(before) != len(after):
             sys.exit('%s: message count changed during rebrand' % grd)
-        id_map = {old: new for old, new in zip(before, after)
-                  if old and new and old != new}
-        if set(id_map.values()) & set(before):
-            sys.exit('%s: a new message ID collides with an existing one' % grd)
 
-        id_re = re.compile(r'(<translation id=")(\d+)(")')
+        # Old ID -> new ID for messages whose text changed. If the new text
+        # is identical to another message, that message's translation already
+        # applies and the old entry is left alone.
+        taken = set(before)
+        id_map = {}
+        for old, new in zip(before, after):
+            if old and new and old != new and new not in taken:
+                id_map[old] = new
+                taken.add(new)
 
         def swap_id(match):
             return match.group(1) + id_map.get(match.group(2),
@@ -107,7 +148,7 @@ def main():
         xtb_count = 0
         for xtb in sorted(src.glob(xtb_glob)):
             text = xtb.read_text(encoding='utf-8')
-            new_text = PRODUCT_RE.sub(args.name, id_re.sub(swap_id, text))
+            new_text = rename(ID_RE.sub(swap_id, text), args.name)
             if new_text != text:
                 xtb.write_bytes(new_text.encode('utf-8'))
                 xtb_count += 1

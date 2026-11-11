@@ -1,0 +1,396 @@
+diff --git a/build/win/reorder-imports.py b/build/win/reorder-imports.py
+index 11602df27..fc1729aa6 100755
+--- a/build/win/reorder-imports.py
++++ b/build/win/reorder-imports.py
+@@ -27,8 +27,8 @@ def reorder_imports(input_dir, output_dir, architecture):
+     # correct executable in the first place, so that this script
+     # only needs to verify that and not write a whole new exe.
+ 
+-    input_image = os.path.join(input_dir, 'chrome.exe')
+-    output_image = os.path.join(output_dir, 'chrome.exe')
++    input_image = os.path.join(input_dir, 'yatesium.exe')
++    output_image = os.path.join(output_dir, 'yatesium.exe')
+ 
+     # pefile mmap()s the whole executable, and then parses parts of
+     # it into python data structures for ease of processing.
+@@ -51,7 +51,7 @@ def reorder_imports(input_dir, output_dir, architecture):
+ 
+     found_elf = False
+     for i, peimport in enumerate(pe.DIRECTORY_ENTRY_IMPORT):
+-        if peimport.dll.lower() == b'chrome_elf.dll':
++        if peimport.dll.lower() == b'yatesium_elf.dll':
+             assert not found_elf, 'only one chrome_elf.dll import expected'
+             found_elf = True
+             if i > 0:
+@@ -90,7 +90,7 @@ def reorder_imports(input_dir, output_dir, architecture):
+ 
+     pe.write(filename=output_image)
+ 
+-    for fname in glob.iglob(os.path.join(input_dir, 'chrome.exe.*')):
++    for fname in glob.iglob(os.path.join(input_dir, 'yatesium.exe.*')):
+         shutil.copy(fname, os.path.join(output_dir, os.path.basename(fname)))
+     return 0
+ 
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index f1d133b6c..d933ba4f9 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -87,12 +87,12 @@ if (is_win) {
+     # initialexe/ is used so that the we can reorder imports and write back to
+     # the final destination at $root_out_dir/.
+     inputs = [
+-      "$root_out_dir/initialexe/chrome.exe",
+-      "$root_out_dir/initialexe/chrome.exe.pdb",
++      "$root_out_dir/initialexe/yatesium.exe",
++      "$root_out_dir/initialexe/yatesium.exe.pdb",
+     ]
+     outputs = [
+-      "$root_out_dir/chrome.exe",
+-      "$root_out_dir/chrome.exe.pdb",
++      "$root_out_dir/yatesium.exe",
++      "$root_out_dir/yatesium.exe.pdb",
+     ]
+     args = [
+       "-i",
+@@ -155,7 +155,7 @@ if (!is_android && !is_mac) {
+   }
+ 
+   if (is_win) {
+-    _chrome_output_name = "initialexe/chrome"
++    _chrome_output_name = "initialexe/yatesium"
+   } else {
+     _chrome_output_name = "chrome"
+   }
+@@ -435,7 +435,7 @@ if (is_win) {
+       "app/startup_timestamps.h",
+     ]
+ 
+-    output_name = "chrome"
++    output_name = "yatesium"
+ 
+     deps = [
+       ":chrome_dll_manifest",
+@@ -1854,7 +1854,7 @@ if (is_android) {
+ if (is_win && enable_resource_allowlist_generation) {
+   generate_resource_allowlist("resource_allowlist") {
+     deps = [ ":chrome_dll" ]
+-    inputs = [ "$root_out_dir/chrome.dll.pdb" ]
++    inputs = [ "$root_out_dir/yatesium.dll.pdb" ]
+     output = _chrome_resource_allowlist
+   }
+ }
+diff --git a/chrome/app/chrome_dll.ver b/chrome/app/chrome_dll.ver
+index 910fca21d..5179a90a5 100644
+--- a/chrome/app/chrome_dll.ver
++++ b/chrome/app/chrome_dll.ver
+@@ -1,2 +1,2 @@
+-INTERNAL_NAME=chrome_dll
+-ORIGINAL_FILENAME=chrome.dll
++INTERNAL_NAME=yatesium_dll
++ORIGINAL_FILENAME=yatesium.dll
+diff --git a/chrome/app/chrome_exe.ver b/chrome/app/chrome_exe.ver
+index a2d39013f..94fc6be3c 100644
+--- a/chrome/app/chrome_exe.ver
++++ b/chrome/app/chrome_exe.ver
+@@ -1,2 +1,2 @@
+-INTERNAL_NAME=chrome_exe
+-ORIGINAL_FILENAME=chrome.exe
++INTERNAL_NAME=yatesium_exe
++ORIGINAL_FILENAME=yatesium.exe
+diff --git a/chrome/browser/shortcuts/platform_util_win.cc b/chrome/browser/shortcuts/platform_util_win.cc
+index e5ff01aa7..066d328d5 100644
+--- a/chrome/browser/shortcuts/platform_util_win.cc
++++ b/chrome/browser/shortcuts/platform_util_win.cc
+@@ -13,7 +13,7 @@ namespace shortcuts {
+ namespace {
+ 
+ constexpr base::FilePath::CharType kChromeProxyExecutable[] =
+-    FILE_PATH_LITERAL("chrome_proxy.exe");
++    FILE_PATH_LITERAL("yatesium_proxy.exe");
+ 
+ }  // namespace
+ 
+diff --git a/chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_shortcut_win.cc b/chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_shortcut_win.cc
+index 3de445a8a..03bf18a28 100644
+--- a/chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_shortcut_win.cc
++++ b/chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_shortcut_win.cc
+@@ -44,7 +44,7 @@ base::FilePath GetChromeProxyPath() {
+   if (!base::PathService::Get(base::DIR_EXE, &chrome_dir)) {
+     return base::FilePath();
+   }
+-  return chrome_dir.Append(FILE_PATH_LITERAL("chrome_proxy.exe"));
++  return chrome_dir.Append(FILE_PATH_LITERAL("yatesium_proxy.exe"));
+ }
+ 
+ int GetDisplayNameMessageId() {
+diff --git a/chrome/browser/web_applications/chrome_pwa_launcher/BUILD.gn b/chrome/browser/web_applications/chrome_pwa_launcher/BUILD.gn
+index 8a2eca607..baa790981 100644
+--- a/chrome/browser/web_applications/chrome_pwa_launcher/BUILD.gn
++++ b/chrome/browser/web_applications/chrome_pwa_launcher/BUILD.gn
+@@ -12,6 +12,7 @@ process_version_rc_template("chrome_pwa_launcher_version") {
+ }
+ 
+ executable("chrome_pwa_launcher") {
++  output_name = "yatesium_pwa_launcher"
+   sources = [
+     "chrome_pwa_launcher_exe.rc",
+     "chrome_pwa_launcher_main.cc",
+diff --git a/chrome/browser/web_applications/chrome_pwa_launcher/chrome_pwa_launcher.ver b/chrome/browser/web_applications/chrome_pwa_launcher/chrome_pwa_launcher.ver
+index 17c6db218..2658e4ea8 100644
+--- a/chrome/browser/web_applications/chrome_pwa_launcher/chrome_pwa_launcher.ver
++++ b/chrome/browser/web_applications/chrome_pwa_launcher/chrome_pwa_launcher.ver
+@@ -1,2 +1,2 @@
+-INTERNAL_NAME=chrome_pwa_launcher
+-ORIGINAL_FILENAME=chrome_pwa_launcher.exe
++INTERNAL_NAME=yatesium_pwa_launcher
++ORIGINAL_FILENAME=yatesium_pwa_launcher.exe
+diff --git a/chrome/browser/web_applications/chrome_pwa_launcher/chrome_pwa_launcher_util.cc b/chrome/browser/web_applications/chrome_pwa_launcher/chrome_pwa_launcher_util.cc
+index 1c12414f3..964b78d6a 100644
+--- a/chrome/browser/web_applications/chrome_pwa_launcher/chrome_pwa_launcher_util.cc
++++ b/chrome/browser/web_applications/chrome_pwa_launcher/chrome_pwa_launcher_util.cc
+@@ -11,7 +11,7 @@
+ namespace {
+ 
+ constexpr base::FilePath::StringViewType kChromePwaLauncherExecutable =
+-    L"chrome_pwa_launcher.exe";
++    L"yatesium_pwa_launcher.exe";
+ 
+ }  // namespace
+ 
+diff --git a/chrome/chrome_elf/BUILD.gn b/chrome/chrome_elf/BUILD.gn
+index 5cacf4f85..9772d1730 100644
+--- a/chrome/chrome_elf/BUILD.gn
++++ b/chrome/chrome_elf/BUILD.gn
+@@ -49,6 +49,7 @@ static_library("test_stubs") {
+ }
+ 
+ shared_library("chrome_elf") {
++  output_name = "yatesium_elf"
+   sources = [
+     "chrome_elf.def",
+     "chrome_elf_main.cc",
+diff --git a/chrome/chrome_elf/chrome_elf.def b/chrome/chrome_elf/chrome_elf.def
+index 7303c69c5..03e5bd982 100644
+--- a/chrome/chrome_elf/chrome_elf.def
++++ b/chrome/chrome_elf/chrome_elf.def
+@@ -1,7 +1,7 @@
+ ; Copyright 2013 The Chromium Authors
+ ; Use of this source code is governed by a BSD-style license that can be
+ ; found in the LICENSE file.
+-LIBRARY  "chrome_elf.dll"
++LIBRARY  "yatesium_elf.dll"
+ 
+ EXPORTS
+   ; From components/crash/core/app/crash_export_stubs.cc
+diff --git a/chrome/chrome_elf/chrome_elf.ver b/chrome/chrome_elf/chrome_elf.ver
+index 78f890e7e..d7a70977b 100644
+--- a/chrome/chrome_elf/chrome_elf.ver
++++ b/chrome/chrome_elf/chrome_elf.ver
+@@ -1,2 +1,2 @@
+-INTERNAL_NAME=chrome_elf_dll
+-ORIGINAL_FILENAME=chrome_elf.dll
++INTERNAL_NAME=yatesium_elf_dll
++ORIGINAL_FILENAME=yatesium_elf.dll
+diff --git a/chrome/chrome_elf/chrome_elf_constants.cc b/chrome/chrome_elf/chrome_elf_constants.cc
+index 04bc26d85..57f49fa02 100644
+--- a/chrome/chrome_elf/chrome_elf_constants.cc
++++ b/chrome/chrome_elf/chrome_elf_constants.cc
+@@ -4,7 +4,7 @@
+ 
+ #include "chrome/chrome_elf/chrome_elf_constants.h"
+ 
+-const wchar_t kWerDll[] = L"chrome_wer.dll";
++const wchar_t kWerDll[] = L"yatesium_wer.dll";
+ 
+ namespace elf_sec {
+ 
+diff --git a/chrome/chrome_paks.gni b/chrome/chrome_paks.gni
+index 150c570d3..cf3b04e86 100644
+--- a/chrome/chrome_paks.gni
++++ b/chrome/chrome_paks.gni
+@@ -106,7 +106,7 @@ template("chrome_repack_percent") {
+           [ "//chrome/browser/resources/extensions_zero_state_promo:resources" ]
+     }
+ 
+-    output = "${invoker.output_dir}/chrome_${percent}_percent.pak"
++    output = "${invoker.output_dir}/yatesium_${percent}_percent.pak"
+   }
+ }
+ 
+diff --git a/chrome/chrome_proxy/BUILD.gn b/chrome/chrome_proxy/BUILD.gn
+index fd1927203..c89bd0d09 100644
+--- a/chrome/chrome_proxy/BUILD.gn
++++ b/chrome/chrome_proxy/BUILD.gn
+@@ -12,6 +12,7 @@ process_version_rc_template("chrome_proxy_version") {
+ }
+ 
+ executable("chrome_proxy") {
++  output_name = "yatesium_proxy"
+   deps = [
+     ":chrome_proxy_version",
+     "//base",
+diff --git a/chrome/chrome_proxy/chrome_proxy.ver b/chrome/chrome_proxy/chrome_proxy.ver
+index 32083b145..ed73c9f64 100644
+--- a/chrome/chrome_proxy/chrome_proxy.ver
++++ b/chrome/chrome_proxy/chrome_proxy.ver
+@@ -1,2 +1,2 @@
+-INTERNAL_NAME=chrome_proxy
+-ORIGINAL_FILENAME=chrome_proxy.exe
++INTERNAL_NAME=yatesium_proxy
++ORIGINAL_FILENAME=yatesium_proxy.exe
+diff --git a/chrome/chrome_proxy/chrome_proxy_main_win.cc b/chrome/chrome_proxy/chrome_proxy_main_win.cc
+index 776f544e4..94469c285 100644
+--- a/chrome/chrome_proxy/chrome_proxy_main_win.cc
++++ b/chrome/chrome_proxy/chrome_proxy_main_win.cc
+@@ -15,10 +15,10 @@
+ namespace {
+ 
+ constexpr base::FilePath::CharType kChromeExecutable[] =
+-    FILE_PATH_LITERAL("chrome.exe");
++    FILE_PATH_LITERAL("yatesium.exe");
+ 
+ constexpr base::FilePath::CharType kChromeProxyExecutable[] =
+-    FILE_PATH_LITERAL("chrome_proxy.exe");
++    FILE_PATH_LITERAL("yatesium_proxy.exe");
+ 
+ }  // namespace
+ 
+diff --git a/chrome/common/chrome_constants.cc b/chrome/common/chrome_constants.cc
+index 1a6b899b4..402607931 100644
+--- a/chrome/common/chrome_constants.cc
++++ b/chrome/common/chrome_constants.cc
+@@ -32,9 +32,9 @@ const char kChromeVersion[] = CHROME_VERSION_STRING;
+ 
+ #if BUILDFLAG(IS_WIN)
+ const base::FilePath::CharType kBrowserProcessExecutableName[] =
+-    FPL("chrome.exe");
++    FPL("yatesium.exe");
+ const base::FilePath::CharType kHelperProcessExecutableName[] =
+-    FPL("chrome.exe");
++    FPL("yatesium.exe");
+ #elif BUILDFLAG(IS_MAC)
+ const base::FilePath::CharType kBrowserProcessExecutableName[] =
+     FPL(PRODUCT_FULLNAME_STRING);
+@@ -54,9 +54,9 @@ const base::FilePath::CharType kHelperProcessExecutableName[] = FPL("exe");
+ 
+ #if BUILDFLAG(IS_WIN)
+ const base::FilePath::CharType kBrowserProcessExecutablePath[] =
+-    FPL("chrome.exe");
++    FPL("yatesium.exe");
+ const base::FilePath::CharType kHelperProcessExecutablePath[] =
+-    FPL("chrome.exe");
++    FPL("yatesium.exe");
+ #elif BUILDFLAG(IS_MAC)
+ const base::FilePath::CharType kBrowserProcessExecutablePath[] =
+     FPL(PRODUCT_FULLNAME_STRING ".app/Contents/MacOS/" PRODUCT_FULLNAME_STRING);
+diff --git a/chrome/common/chrome_constants.h b/chrome/common/chrome_constants.h
+index e7b9a848b..723913b66 100644
+--- a/chrome/common/chrome_constants.h
++++ b/chrome/common/chrome_constants.h
+@@ -36,9 +36,9 @@ extern const char kMacHelperSuffixAlerts[];
+ 
+ #if BUILDFLAG(IS_WIN)
+ inline constexpr base::FilePath::CharType kBrowserResourcesDll[] =
+-    FILE_PATH_LITERAL("chrome.dll");
++    FILE_PATH_LITERAL("yatesium.dll");
+ inline constexpr base::FilePath::CharType kElfDll[] =
+-    FILE_PATH_LITERAL("chrome_elf.dll");
++    FILE_PATH_LITERAL("yatesium_elf.dll");
+ inline constexpr base::FilePath::CharType kRendererDll[] =
+     FILE_PATH_LITERAL("chrome_renderer.dll");
+ inline constexpr base::FilePath::CharType kStatusTrayWindowClass[] =
+diff --git a/chrome/installer/util/util_constants.h b/chrome/installer/util/util_constants.h
+index 825aba256..0c24e4a71 100644
+--- a/chrome/installer/util/util_constants.h
++++ b/chrome/installer/util/util_constants.h
+@@ -392,11 +392,11 @@ inline constexpr char kGoogleUpdateIsMachineEnvVar[] = "GoogleUpdateIsMachine";
+ // TODO(gab): Rename setup.exe itself altogether and use the same binary for
+ // Active Setup.
+ inline constexpr wchar_t kActiveSetupExe[] = L"chrmstp.exe";
+-inline constexpr wchar_t kChromeDll[] = L"chrome.dll";
+-inline constexpr wchar_t kChromeExe[] = L"chrome.exe";
++inline constexpr wchar_t kChromeDll[] = L"yatesium.dll";
++inline constexpr wchar_t kChromeExe[] = L"yatesium.exe";
+ inline constexpr wchar_t kChromeNewExe[] = L"new_chrome.exe";
+ inline constexpr wchar_t kChromeOldExe[] = L"old_chrome.exe";
+-inline constexpr wchar_t kChromeProxyExe[] = L"chrome_proxy.exe";
++inline constexpr wchar_t kChromeProxyExe[] = L"yatesium_proxy.exe";
+ inline constexpr wchar_t kChromeProxyNewExe[] = L"new_chrome_proxy.exe";
+ inline constexpr wchar_t kChromeProxyOldExe[] = L"old_chrome_proxy.exe";
+ inline constexpr wchar_t kCmdRenameChromeExe[] = L"cmd";
+@@ -419,7 +419,7 @@ inline constexpr wchar_t kInstallerDir[] = L"Installer";
+ inline constexpr wchar_t kInstallTempDir[] = L"Temp";
+ inline constexpr wchar_t kLnkExt[] = L".lnk";
+ inline constexpr wchar_t kNotificationHelperExe[] = L"notification_helper.exe";
+-inline constexpr wchar_t kWerDll[] = L"chrome_wer.dll";
++inline constexpr wchar_t kWerDll[] = L"yatesium_wer.dll";
+ 
+ // DowngradeVersion holds the version from which Chrome was downgraded. In case
+ // of multiple downgrades (e.g., 75->74->73), it retains the highest version
+diff --git a/components/crash/win/BUILD.gn b/components/crash/win/BUILD.gn
+index 5e3170394..3f50fc4fb 100644
+--- a/components/crash/win/BUILD.gn
++++ b/components/crash/win/BUILD.gn
+@@ -15,6 +15,7 @@ process_version_rc_template("chrome_wer_resources") {
+ }
+ 
+ shared_library("chrome_wer") {
++  output_name = "yatesium_wer"
+   sources = [
+     "chrome_wer.def",
+     "chrome_wer_main.cc",
+diff --git a/components/crash/win/chrome_wer.def b/components/crash/win/chrome_wer.def
+index 87e8d66b0..f9a9ac24e 100644
+--- a/components/crash/win/chrome_wer.def
++++ b/components/crash/win/chrome_wer.def
+@@ -1,7 +1,7 @@
+ ; Copyright 2022 The Chromium Authors
+ ; Use of this source code is governed by a BSD-style license that can be
+ ; found in the LICENSE file.
+-LIBRARY  "chrome_wer.dll"
++LIBRARY  "yatesium_wer.dll"
+ 
+ EXPORTS
+   ; These are required for the WER api.
+diff --git a/components/crash/win/chrome_wer.ver b/components/crash/win/chrome_wer.ver
+index 58ad9b44c..18d6af58d 100644
+--- a/components/crash/win/chrome_wer.ver
++++ b/components/crash/win/chrome_wer.ver
+@@ -1,2 +1,2 @@
+-INTERNAL_NAME=chrome_wer_dll
+-ORIGINAL_FILENAME=chrome_wer.dll
++INTERNAL_NAME=yatesium_wer_dll
++ORIGINAL_FILENAME=yatesium_wer.dll
+diff --git a/components/tracing/common/etw_stack_sampling_win.cc b/components/tracing/common/etw_stack_sampling_win.cc
+index cb5977bf1..a46564695 100644
+--- a/components/tracing/common/etw_stack_sampling_win.cc
++++ b/components/tracing/common/etw_stack_sampling_win.cc
+@@ -29,7 +29,7 @@ namespace {
+ // Images whose functions should be symbolized in ETW call stacks, and the
+ // directory where each is expected to be.
+ constexpr std::pair<const wchar_t*, int> kImagesOfInterest[] = {
+-    {L"chrome.exe", base::DIR_EXE},        {L"chrome.dll", base::DIR_MODULE},
++    {L"yatesium.exe", base::DIR_EXE},      {L"yatesium.dll", base::DIR_MODULE},
+     {L"dxcompiler.dll", base::DIR_MODULE}, {L"dxil.dll", base::DIR_MODULE},
+     {L"libEGL.dll", base::DIR_MODULE},     {L"libGLESv2.dll", base::DIR_MODULE},
+     {L"vulkan-1.dll", base::DIR_MODULE},   {L"advapi32.dll", base::DIR_SYSTEM},
+diff --git a/ui/base/resource/resource_bundle.cc b/ui/base/resource/resource_bundle.cc
+index 1c25647fd..906959f15 100644
+--- a/ui/base/resource/resource_bundle.cc
++++ b/ui/base/resource/resource_bundle.cc
+@@ -1076,13 +1076,13 @@ void ResourceBundle::LoadChromeResources() {
+   // 2x images. The 1x data pack only has 1x images, thus passes in an accurate
+   // scale factor to gfx::ImageSkia::AddRepresentation.
+   if (IsScaleFactorSupported(k100Percent)) {
+-    AddDataPackFromPath(GetResourcesPakFilePath("chrome_100_percent.pak"),
++    AddDataPackFromPath(GetResourcesPakFilePath("yatesium_100_percent.pak"),
+                         k100Percent);
+   }
+ 
+   if (IsScaleFactorSupported(k200Percent)) {
+     AddOptionalDataPackFromPath(
+-        GetResourcesPakFilePath("chrome_200_percent.pak"), k200Percent);
++        GetResourcesPakFilePath("yatesium_200_percent.pak"), k200Percent);
+   }
+ }
+ 

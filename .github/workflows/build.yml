@@ -130,4 +130,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/*.zip \
             --repo "$GITHUB_REPOSITORY" \
             --title "Yatesium ${GITHUB_REF_NAME#v}" \
-            --notes "Portable build for Windows x64. Extract the zip and run chrome.exe."
+            --notes "Portable build for Windows x64. Extract the zip and run yatesium.exe."

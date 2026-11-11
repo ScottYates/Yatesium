@@ -5,9 +5,11 @@ plus a small patch set:
 
 - Manifest V2 extensions work. Upstream Chromium disables them.
 - Extensions install from any site or store, not only the Chrome Web Store.
-- Portable. All browser data lives in a `Data` folder next to `chrome.exe`.
-  The folder is created on first start.
-- Yatesium name and logo.
+- Portable. All browser data lives in a `Data` folder next to
+  `yatesium.exe`. The folder is created on first start.
+- Its own identity: Yatesium name and logo, `yatesium.exe` and matching
+  file names, `yatesium://` internal pages, and no Chrome or Chromium product
+  name in the interface. See "Identity" below for what is left.
 - Standard Chromium features otherwise, including H.264/AAC media support.
 
 The pinned Chromium version is in `chromium_version.txt`.
@@ -41,7 +43,7 @@ sign in to a Google account for sync.
 
 ## Using the portable build
 
-Extract the zip anywhere and run `Yatesium\chrome.exe`.
+Extract the zip anywhere and run `Yatesium\yatesium.exe`.
 
 - Data is stored in `Yatesium\Data` instead of `%LOCALAPPDATA%`.
 - To update, extract a newer zip over the folder. `Data` is kept.
@@ -51,7 +53,6 @@ Extract the zip anywhere and run `Yatesium\chrome.exe`.
 
 Limits:
 
-- The executable is still named `chrome.exe`. Renaming it needs more patches.
 - Chromium writes a few small values to the registry under
   `HKCU\Software\Yatesium`. No files are written outside the folder, apart
   from temporary files and your downloads.
@@ -61,10 +62,40 @@ Limits:
   logged-in sessions do not.
 - There is no auto-update. Update by building and extracting a new zip.
 
+## Identity
+
+What is renamed:
+
+- Program files: `yatesium.exe`, `yatesium.dll`, `yatesium_elf.dll`,
+  `yatesium_wer.dll`, `yatesium_proxy.exe`, `yatesium_pwa_launcher.exe` and
+  the `yatesium_*_percent.pak` resource files, including the names in their
+  Windows file properties.
+- Interface text in every language. "Chrome", "Google Chrome" and "Chromium"
+  become "Yatesium". "Chrome Web Store" becomes "Web Store".
+- The address bar shows `yatesium://settings` and accepts `yatesium://` URLs.
+
+What still says Chrome or Chromium, and why:
+
+- The user agent keeps its `Chrome/<version>` token, and `navigator` brand
+  data keeps "Chromium". Many websites check these and break or serve a
+  degraded page without them.
+- Extensions use the `chrome.*` API and `chrome-extension://` URLs. Renaming
+  either would break every existing extension.
+- Internally the pages are still `chrome://`. The text inside some internal
+  pages and the developer tools shows that form.
+- The copyright line and the open-source credit on the About page, and the
+  license list at `yatesium://credits`. Chromium's license requires its
+  notices to ship with the browser.
+- The Web Store website itself, which is Google's.
+- Names of other products, such as ChromeOS and Chromecast.
+- Internal identifiers that are not shown in the interface, such as window
+  class names and some file names inside the `Data` folder.
+
 ## Installing extensions
 
-- Chrome Web Store: works as in Chromium. Google removed all Manifest V2
-  extensions from the store in August 2026, so it only has Manifest V3.
+- Web Store (Google's Chrome Web Store): works as in Chromium. Google removed
+  all Manifest V2 extensions from the store in August 2026, so it only has
+  Manifest V3.
 - Any `.crx` link: opening it shows the normal install prompt. This covers
   other stores and direct downloads, for example:
   - Microsoft Edge Add-ons:
@@ -72,7 +103,7 @@ Limits:
   - Opera add-ons: `https://addons.opera.com/extensions/download/<name>/`
   - `.crx` files attached to GitHub releases.
 - Unpacked folders and zips (how most Manifest V2 extensions are distributed
-  now): open `chrome://extensions`, turn on Developer mode and use "Load
+  now): open `yatesium://extensions`, turn on Developer mode and use "Load
   unpacked", or drag a `.crx` file onto the page.
 
 Extensions keep updating from the `update_url` in their manifest.
@@ -107,6 +138,7 @@ about 100 GB of free disk and several hours.
 | `patches/` | Source patches, applied in name order |
 | `branding/` | Logo files copied over the Chromium originals |
 | `scripts/rebrand.py` | Renames the product in UI strings and translations |
+| `patches/0006`, `0007` | Binary file names and the `yatesium://` address bar |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |
@@ -116,5 +148,5 @@ about 100 GB of free disk and several hours.
 ## License
 
 The files in this repository are under the BSD 3-Clause license in `LICENSE`.
-Chromium and its components have their own licenses, shown at `about:credits`
-in the browser.
+Chromium and its components have their own licenses, shown at
+`yatesium://credits` in the browser.

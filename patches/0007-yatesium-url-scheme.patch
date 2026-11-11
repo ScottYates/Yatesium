@@ -1,0 +1,58 @@
+diff --git a/components/omnibox/browser/location_bar_model_impl.cc b/components/omnibox/browser/location_bar_model_impl.cc
+index 5445f8e53..76e8e0b12 100644
+--- a/components/omnibox/browser/location_bar_model_impl.cc
++++ b/components/omnibox/browser/location_bar_model_impl.cc
+@@ -5,6 +5,7 @@
+ #include "components/omnibox/browser/location_bar_model_impl.h"
+ 
+ #include <string>
++#include <string_view>
+ 
+ #include "base/check.h"
+ #include "base/feature_list.h"
+@@ -147,12 +148,19 @@ std::u16string LocationBarModelImpl::GetFormattedURL(
+   // Note that we can't unescape spaces here, because if the user copies this
+   // and pastes it into another program, that program may think the URL ends at
+   // the space.
+-  const std::u16string formatted_text =
++  std::u16string formatted_text =
+       delegate_->FormattedStringWithEquivalentMeaning(
+           url, url_formatter::FormatUrl(url, format_types,
+                                         base::UnescapeRule::NORMAL, nullptr,
+                                         nullptr, nullptr));
+ 
++  // Yatesium: show internal pages as yatesium:// in the address bar. The
++  // URL fixer maps the typed form back to the internal scheme.
++  static constexpr std::u16string_view kInternalPrefix = u"chrome://";
++  if (formatted_text.starts_with(kInternalPrefix)) {
++    formatted_text.replace(0, kInternalPrefix.size(), u"yatesium://");
++  }
++
+   // Truncating the URL breaks editing and then pressing enter, but hopefully
+   // people won't try to do much with such enormous URLs anyway. If this becomes
+   // a real problem, we could perhaps try to keep some sort of different "elided
+diff --git a/components/url_formatter/url_fixer.cc b/components/url_formatter/url_fixer.cc
+index f70743151..3e2585292 100644
+--- a/components/url_formatter/url_fixer.cc
++++ b/components/url_formatter/url_fixer.cc
+@@ -39,6 +39,8 @@ namespace {
+ 
+ // Hardcode these constants to avoid dependences on //chrome and //content.
+ const char kChromeUIScheme[] = "chrome";
++// Yatesium: typed "yatesium://page" opens the internal page "chrome://page".
++const char kYatesiumScheme[] = "yatesium";
+ const char kDevToolsScheme[] = "devtools";
+ const char kChromeUIDefaultHost[] = "version";
+ const char kViewSourceScheme[] = "view-source";
+@@ -459,6 +461,11 @@ std::string SegmentURLInternal(std::string* text, url::Parsed* parts) {
+     }
+   }
+ 
++  // Yatesium: "yatesium:" is an alias for the internal "chrome:" scheme.
++  if (scheme == kYatesiumScheme) {
++    scheme = kChromeUIScheme;
++  }
++
+   // Proceed with about, chrome, and devtools schemes,
+   // but not file or nonstandard schemes.
+   if ((scheme != url::kAboutScheme) && (scheme != kChromeUIScheme) &&

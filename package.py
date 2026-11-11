@@ -25,20 +25,32 @@ EXCLUDE = re.compile(
     r'|^chromedriver|^chromoting|^First Run$)', re.IGNORECASE)
 
 # The package is rejected if any of these is missing.
-REQUIRED = ('chrome.exe', 'chrome.dll', 'chrome_elf.dll', 'resources.pak',
-            'icudtl.dat', 'v8_context_snapshot.bin', 'locales/en-US.pak')
+REQUIRED = ('yatesium.exe', 'yatesium.dll', 'yatesium_elf.dll',
+            'resources.pak', 'icudtl.dat', 'v8_context_snapshot.bin',
+            'locales/en-US.pak')
+
+# Chromium's file list uses the upstream names. Patch 0006 renames these.
+RENAMED = {
+    'chrome.exe': 'yatesium.exe',
+    'chrome.dll': 'yatesium.dll',
+    'chrome_elf.dll': 'yatesium_elf.dll',
+    'chrome_wer.dll': 'yatesium_wer.dll',
+    'chrome_proxy.exe': 'yatesium_proxy.exe',
+    'chrome_pwa_launcher.exe': 'yatesium_pwa_launcher.exe',
+    'chrome_100_percent.pak': 'yatesium_100_percent.pak',
+    'chrome_200_percent.pak': 'yatesium_200_percent.pak',
+}
 
 README = '''Yatesium %(version)s (portable)
 
-Start the browser with chrome.exe.
+Start the browser with yatesium.exe.
 
 All browser data (profile, settings, extensions, cache) is stored in the
-"Data" folder next to chrome.exe. The folder is created on first start.
+"Data" folder next to yatesium.exe. The folder is created on first start.
 To update, extract a newer Yatesium zip over this folder. "Data" is kept.
 To start fresh, close the browser and delete "Data".
 
-Yatesium is built from Chromium %(chromium)s. See about:credits in the browser
-for the licenses of Chromium and its components.
+Open-source licenses: yatesium://credits
 '''
 
 
@@ -58,6 +70,7 @@ def list_files(files_cfg, out_dir):
             continue
         if EXCLUDE.search(name):
             continue
+        name = RENAMED.get(name, name)
         for match in glob.glob(str(out_dir / name)):
             path = Path(match)
             if path.is_file():
@@ -91,8 +104,11 @@ def main():
                          compresslevel=9) as archive:
         for name in sorted(files):
             archive.write(files[name], 'Yatesium/' + name)
-        archive.writestr('Yatesium/README.txt',
-                         README % {'version': version, 'chromium': chromium})
+        archive.writestr('Yatesium/README.txt', README % {'version': version})
+    leftovers = [name for name in sorted(files) if 'chrom' in name.lower()]
+    if leftovers:
+        print('Warning: packaged files still named after Chrome: ' +
+              ', '.join(leftovers))
     print('Packaged %d files into %s (%.0f MB)' %
           (len(files) + 1, zip_path, zip_path.stat().st_size / 1e6))
 

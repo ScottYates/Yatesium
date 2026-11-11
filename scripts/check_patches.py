@@ -2,9 +2,9 @@
 """Checks that the Yatesium changes apply to a Chromium version.
 
 Downloads only the files the patches and the rebrand script touch (a partial
-clone of the Chromium GitHub mirror, a few hundred MB), applies every patch,
-runs the string rebrand and verifies the branding overlay. Takes about a
-minute. Run it before starting a multi-hour build on a new Chromium version.
+clone of the Chromium GitHub mirror, under 1 GB), applies every patch,
+runs the string rebrand and verifies the branding overlay. Takes a few
+minutes. Run it before starting a multi-hour build on a new Chromium version.
 
 Usage: check_patches.py [chromium version] [--keep DIR]
 """
@@ -24,11 +24,13 @@ MIRROR = 'https://github.com/chromium/chromium'
 REBRAND_PATHS = (
     '/tools/grit/',
     '/chrome/app/*.grd',
-    '/chrome/app/**/*.grdp',
+    '/chrome/**/*.grdp',
     '/chrome/app/resources/chromium_strings_*.xtb',
+    '/chrome/app/resources/generated_resources_*.xtb',
     '/components/*.grd',
     '/components/**/*.grdp',
     '/components/strings/components_chromium_strings_*.xtb',
+    '/components/strings/components_strings_*.xtb',
     '/extensions/strings/',
     '/extensions/*.grd*',
 )
