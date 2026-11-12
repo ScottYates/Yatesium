@@ -20,7 +20,8 @@
 param(
     [string]$Drive = '',
     [string]$RepoUrl = 'https://github.com/ScottYates/Yatesium.git',
-    [int]$Jobs = 0
+    [int]$Jobs = 0,
+    [switch]$NoBuild   # start the controller without starting a build
 )
 
 $ErrorActionPreference = 'Stop'
@@ -197,11 +198,14 @@ if (Test-Path "$repoDir\.git") {
 # -- 4. Build ----------------------------------------------------------------
 #
 # The build runs as a hidden child process that writes to build-output.log.
-# This window stays open as a small controller. It accepts three requests,
+# This window stays open as a small controller. It accepts four requests,
 # each given by writing one word into <build folder>\control\request.txt:
 #   build   update the repository and start (or resume) the build
 #   stop    stop the running build
 #   quit    stop the build and close the controller
+#   copy    copy the newest zip in dist to the folder named in
+#           control\share.txt, creating that folder if needed; the outcome
+#           is written to control\copy-result.txt
 # Nothing else is accepted, so the file cannot be used to run other commands.
 # The current state is written to control\status.txt every few seconds.
 
@@ -212,6 +216,8 @@ $controlDir = "$buildDir\control"
 $requestFile = "$controlDir\request.txt"
 $statusFile = "$controlDir\status.txt"
 $pidFile = "$controlDir\build.pid"
+$shareFile = "$controlDir\share.txt"
+$copyResultFile = "$controlDir\copy-result.txt"
 New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
 if (Test-Path $requestFile) { Remove-Item $requestFile -Force }
 
@@ -260,6 +266,30 @@ function Stop-Build($process) {
     Add-Content -Path $outputLog -Value "==== build stopped on request $(Get-Date -Format o) ====" -Encoding ASCII
 }
 
+function Copy-BuildToShare {
+    # Copies only the newest build zip, and only to the folder in share.txt.
+    $result = 'failed: unknown error'
+    try {
+        $target = ''
+        if (Test-Path $shareFile) { $target = ([string](Get-Content -Path $shareFile -Raw)).Trim() }
+        if ($target -notmatch '^(\\\\[^\\]+\\[^\\]+|[A-Za-z]:)(\\[^<>"|?*]*)?$') {
+            throw "control\share.txt does not hold a folder path (found '$target')"
+        }
+        $zip = Get-ChildItem "$buildDir\dist\*.zip" -ErrorAction Stop |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $zip) { throw "no zip in $buildDir\dist" }
+        New-Item -ItemType Directory -Force -Path $target -ErrorAction Stop | Out-Null
+        Copy-Item -Path $zip.FullName -Destination $target -Force -ErrorAction Stop
+        $copy = Join-Path $target $zip.Name
+        $hash = (Get-FileHash -Path $copy -Algorithm SHA256 -ErrorAction Stop).Hash
+        $result = "ok: $copy ($($zip.Length) bytes) sha256=$hash"
+    } catch {
+        $result = "failed: $($_.Exception.Message)"
+    }
+    try { Set-Content -Path $copyResultFile -Value @($result, "time=$(Get-Date -Format o)") -Encoding ASCII } catch { }
+    Say "Copy to share: $result"
+}
+
 function Get-LastLogLine {
     try {
         $tail = Get-Content -Path $outputLog -Tail 1 -ErrorAction Stop
@@ -270,7 +300,11 @@ function Get-LastLogLine {
 
 Say 'This window controls the build. Closing it does not stop a running build. Run the launcher again to get this window back.'
 $build = Find-RunningBuild
-if (-not $build) { $build = Start-Build }
+if (-not $build -and -not $NoBuild) { $build = Start-Build }
+if (-not $build) {
+    Write-Status 'idle' 'waiting for a request'
+    Say 'No build running. Waiting for a request.'
+}
 $lastShown = Get-Date
 $running = $true
 while ($running) {
@@ -315,6 +349,8 @@ while ($running) {
             Say 'Build stopped on request.'
         }
         if ($request -eq 'quit') { $running = $false }
+    } elseif ($request -eq 'copy') {
+        Copy-BuildToShare
     } elseif ($request) {
         Say "Unknown request ignored: $request"
     }

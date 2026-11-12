@@ -178,8 +178,12 @@ same folder:
 | `build` | `git pull`, then start or resume the build |
 | `stop` | Stop the running build |
 | `quit` | Stop the build and close the controller |
+| `copy` | Copy the newest zip in `dist` to the folder named in `control\share.txt` |
 
-Any other text is ignored. After a pull, changed patches are swapped in and
+Any other text is ignored. `copy` creates the destination folder if needed and
+writes the outcome, with the copy's SHA-256, to `control\copy-result.txt`.
+Start the script with `-NoBuild` to open the controller without starting a
+build. After a pull, changed patches are swapped in and
 only the files they touch are recompiled.
 
 ## Layout
