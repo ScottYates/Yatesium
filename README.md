@@ -67,6 +67,28 @@ Limits:
   logged-in sessions do not.
 - There is no auto-update. Update by building and extracting a new zip.
 
+## Where settings can come from
+
+Yatesium is meant to be carried around, so a setting changes only when the
+user changes it in the browser, an installed extension changes it, or the user
+passes a command-line switch. The other sources Chromium has are removed:
+
+- Policy. No policy source is created: not the Windows registry (Group
+  Policy), not cloud management, not the `--policy` switch. Nothing can force
+  or lock a setting, and `yatesium://policy` stays empty.
+- Experiments. The browser never downloads an experiment configuration, and
+  the experiment list built into Chromium is turned off
+  (`disable_fieldtrial_testing_config` in `flags.gn`). Every feature keeps the
+  default written in the source. `yatesium://flags` still works, because that
+  is the user's own choice.
+- Extensions added from outside. Other programs cannot add extensions through
+  the registry, an `external_extensions.json` file or policy. Extensions are
+  installed only from inside the browser.
+
+Still present: the `initial_preferences` file read on a profile's first run,
+and Chromium's prompts that offer to reset settings it thinks were tampered
+with.
+
 ## Identity
 
 What is renamed:
@@ -168,6 +190,7 @@ only the files they touch are recompiled.
 | `branding/` | Logo files copied over the Chromium originals |
 | `scripts/rebrand.py` | Renames the product in UI strings and translations |
 | `patches/0006`, `0007` | Binary file names and the `yatesium://` address bar |
+| `patches/0008`-`0010` | No policy, no remote experiments, no outside extension installs |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |

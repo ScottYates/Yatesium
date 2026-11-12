@@ -1,0 +1,18 @@
+diff --git a/chrome/browser/extensions/external_provider_manager.cc b/chrome/browser/extensions/external_provider_manager.cc
+index ca6adb440..8856df185 100644
+--- a/chrome/browser/extensions/external_provider_manager.cc
++++ b/chrome/browser/extensions/external_provider_manager.cc
+@@ -97,9 +97,10 @@ void ExternalProviderManager::Shutdown() {
+ }
+ 
+ void ExternalProviderManager::CreateExternalProviders() {
+-  ExternalProviderImpl::CreateExternalProviders(
+-      this, Profile::FromBrowserContext(context_.get()),
+-      &external_extension_providers_);
++  // Yatesium: extensions are installed only from inside the browser. No
++  // external provider is created, so other programs cannot add extensions
++  // through the registry, an external_extensions.json file, a preferences
++  // folder next to the executable or policy.
+ }
+ 
+ // Some extensions will autoupdate themselves externally from Chrome.  These

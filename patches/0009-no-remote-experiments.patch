@@ -1,0 +1,20 @@
+diff --git a/components/variations/service/variations_service.cc b/components/variations/service/variations_service.cc
+index d96dc4596..efbb2cab7 100644
+--- a/components/variations/service/variations_service.cc
++++ b/components/variations/service/variations_service.cc
+@@ -282,12 +282,9 @@ bool IsFetchingEnabled() {
+     return false;
+   }
+ #else
+-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+-          switches::kVariationsServerURL) &&
+-      !g_should_fetch_for_testing) {
+-    DVLOG(1)
+-        << "Not performing repeated fetching in unofficial build without --"
+-        << switches::kVariationsServerURL << " specified.";
++  // Yatesium: no remote experiment configuration is ever downloaded, not
++  // even when a variations server URL is given on the command line.
++  if (!g_should_fetch_for_testing) {
+     return false;
+   }
+ #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)

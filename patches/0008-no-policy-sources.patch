@@ -1,0 +1,45 @@
+diff --git a/chrome/browser/policy/chrome_browser_policy_connector.cc b/chrome/browser/policy/chrome_browser_policy_connector.cc
+index c8b09c3b1..98b98536c 100644
+--- a/chrome/browser/policy/chrome_browser_policy_connector.cc
++++ b/chrome/browser/policy/chrome_browser_policy_connector.cc
+@@ -287,34 +287,12 @@ void ChromeBrowserPolicyConnector::SetDeviceAffiliatedIdsForTesting(
+ 
+ std::vector<std::unique_ptr<policy::ConfigurationPolicyProvider>>
+ ChromeBrowserPolicyConnector::CreatePolicyProviders() {
+-  auto providers = BrowserPolicyConnector::CreatePolicyProviders();
+-  std::unique_ptr<ConfigurationPolicyProvider> platform_provider =
+-      CreatePlatformProvider();
+-  if (platform_provider) {
+-    platform_provider_ = platform_provider.get();
+-    // PlatformProvider should be before all other providers (highest priority).
+-    providers.insert(providers.begin(), std::move(platform_provider));
+-  }
+-
+-#if !BUILDFLAG(IS_CHROMEOS)
+-  MaybeCreateCloudPolicyManager(&providers);
+-#endif  // !BUILDFLAG(IS_CHROMEOS)
+-
+-  std::unique_ptr<CommandLinePolicyProvider> command_line_provider =
+-      CommandLinePolicyProvider::CreateIfAllowed(
+-          *base::CommandLine::ForCurrentProcess(), chrome::GetChannel());
+-  if (command_line_provider) {
+-    command_line_provider_ = command_line_provider.get();
+-    providers.push_back(std::move(command_line_provider));
+-  }
+-
+-  local_test_provider_ =
+-      LocalTestPolicyProvider::CreateIfAllowed(chrome::GetChannel());
+-  if (local_test_provider_) {
+-    local_test_provider_->Init(GetSchemaRegistry());
+-  }
+-
+-  return providers;
++  // Yatesium: settings change only through the user and extensions. No
++  // policy source is created: not the platform one (the Windows registry),
++  // not machine-level cloud management, not the --policy command-line
++  // switch and not the local test provider. Nothing can force or lock a
++  // setting.
++  return BrowserPolicyConnector::CreatePolicyProviders();
+ }
+ 
+ std::unique_ptr<ConfigurationPolicyProvider>

@@ -17,3 +17,8 @@ ffmpeg_branding = "Chrome"
 # Yatesium patches are small, but a new compiler warning should not fail a
 # multi-hour build.
 treat_warnings_as_errors = false
+
+# Do not switch features on or off through the built-in experiment list
+# (testing/variations/fieldtrial_testing_config.json). Every feature keeps the
+# default written in the source.
+disable_fieldtrial_testing_config = true

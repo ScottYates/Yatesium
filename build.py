@@ -280,8 +280,6 @@ class Builder:
         self.mark('git_removed')
 
     def generate(self):
-        if self.done('generated') and (self.out / 'build.ninja').exists():
-            return
         flags = (ROOT / 'flags.gn').read_text(encoding='utf-8')
         # Optional Google API keys (needed for Google sign-in and sync).
         for env_name, gn_name in (
@@ -293,8 +291,14 @@ class Builder:
                 if '"' in value or '\\' in value or '$' in value:
                     sys.exit(env_name + ' contains an unsupported character.')
                 flags += '%s = "%s"\n' % (gn_name, value)
+        args_file = self.out / 'args.gn'
+        if (self.done('generated') and (self.out / 'build.ninja').exists()
+                and args_file.exists()
+                and args_file.read_text(encoding='utf-8') == flags):
+            return
+        # First run, or flags.gn changed since the build files were made.
         self.out.mkdir(parents=True, exist_ok=True)
-        (self.out / 'args.gn').write_text(flags, encoding='utf-8')
+        args_file.write_text(flags, encoding='utf-8')
         self.run('gn.bat', 'gen', 'out/Default', '--fail-on-unused-args',
                  cwd=self.src)
         self.mark('generated')
