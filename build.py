@@ -56,6 +56,46 @@ def log(message):
     print('[yatesium] ' + message, flush=True)
 
 
+def default_compile_jobs():
+    """Picks a compile job count that fits this machine's memory.
+
+    The build tool's own default is one job per logical processor. Heavy
+    Chromium sources need 2 GB or more each, so on a machine with many
+    processors and less memory per processor that default runs Windows out
+    of memory ("The paging file is too small"). Allow one job per 2 GB of
+    what is free to commit right now, capped at the processor count.
+    Returns None if memory cannot be read, which leaves the tool's default.
+    """
+
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [('dwLength', ctypes.c_ulong),
+                    ('dwMemoryLoad', ctypes.c_ulong),
+                    ('ullTotalPhys', ctypes.c_ulonglong),
+                    ('ullAvailPhys', ctypes.c_ulonglong),
+                    ('ullTotalPageFile', ctypes.c_ulonglong),
+                    ('ullAvailPageFile', ctypes.c_ulonglong),
+                    ('ullTotalVirtual', ctypes.c_ulonglong),
+                    ('ullAvailVirtual', ctypes.c_ulonglong),
+                    ('ullAvailExtendedVirtual', ctypes.c_ulonglong)]
+
+    try:
+        status = MemoryStatus()
+        status.dwLength = ctypes.sizeof(MemoryStatus)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+    except (AttributeError, OSError):
+        return None
+    gib = 1024 ** 3
+    total = status.ullTotalPhys / gib
+    free_commit = status.ullAvailPageFile / gib
+    processors = os.cpu_count() or 4
+    jobs = int(max(2, min(processors, min(total, free_commit) // 2)))
+    log('Memory: %.0f GB installed, %.0f GB free to commit. %d logical '
+        'processors. Using %d compile jobs.' %
+        (total, free_commit, processors, jobs))
+    return jobs
+
+
 def read_version():
     return (ROOT / 'chromium_version.txt').read_text(encoding='utf-8').strip()
 
@@ -261,8 +301,9 @@ class Builder:
 
     def compile(self):
         cmd = ['autoninja.bat', '-C', 'out/Default']
-        if self.args.jobs:
-            cmd += ['-j', str(self.args.jobs)]
+        jobs = self.args.jobs or default_compile_jobs()
+        if jobs:
+            cmd += ['-j', str(jobs)]
         cmd.append('chrome')
         log('> ' + ' '.join(cmd))
 
@@ -310,7 +351,8 @@ def main():
     parser.add_argument('--build-dir', default=str(ROOT / 'build'),
                         help='Working folder. Use a short path, e.g. C:\\y.')
     parser.add_argument('-j', '--jobs', type=int,
-                        help='Parallel compile jobs. Default: automatic.')
+                        help='Parallel compile jobs. Default: one per 2 GB of '
+                        'free memory, at most one per logical processor.')
     parser.add_argument('--ci', action='store_true',
                         help='Delete .git folders after checkout to save disk.')
     parser.add_argument('--stop-after-minutes', type=float,
