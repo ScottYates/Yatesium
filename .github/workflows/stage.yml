@@ -85,8 +85,10 @@ jobs:
         shell: pwsh
         run: |
           7z x C:\y-state\state.zip "-o$env:BUILD_DIR" -y -bso0
-          if ($LASTEXITCODE -ne 0) { throw "Could not extract the saved build folder." }
+          # 7-Zip exit code 1 means warnings only.
+          if ($LASTEXITCODE -gt 1) { throw "Could not extract the saved build folder." }
           Remove-Item -Recurse -Force C:\y-state
+          exit 0
 
       - name: Build
         id: build
@@ -97,7 +99,7 @@ jobs:
           GOOGLE_DEFAULT_CLIENT_ID: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
           GOOGLE_DEFAULT_CLIENT_SECRET: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
         run: |
-          python build.py --ci --build-dir $env:BUILD_DIR --start-time $env:START_TIME --stop-after-minutes 210
+          python build.py --ci --build-dir $env:BUILD_DIR --start-time $env:START_TIME --stop-after-minutes 255
           $code = $LASTEXITCODE
           if ($code -eq 0) {
             "finished=true" >> $env:GITHUB_OUTPUT
@@ -122,8 +124,12 @@ jobs:
           }
           Remove-Item -Recurse -Force tmp -ErrorAction SilentlyContinue
           7z a -tzip -mx=1 -mtc=on -mmt=on -bso0 C:\state.zip src state
+          # 7-Zip exit code 1 means warnings only. The Chromium tree has a few
+          # dangling links it cannot read, so warnings are expected. The step
+          # must still end with exit code 0 or the job fails.
           if ($LASTEXITCODE -gt 1) { throw "Could not archive the build folder." }
           "saved=true" >> $env:GITHUB_OUTPUT
+          exit 0
 
       - name: Upload saved build folder
         if: steps.save.outputs.saved == 'true'

@@ -10,7 +10,7 @@ Steps, each skipped if already done:
   6. Package the portable zip (package.py).
 
 Local use:   python build.py
-CI use:      python build.py --ci --stop-after-minutes 210
+CI use:      python build.py --ci --stop-after-minutes 255
 
 With --stop-after-minutes the compile is stopped after that many minutes and
 the script exits with code 124. Running it again resumes the compile.
