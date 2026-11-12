@@ -139,13 +139,26 @@ On Windows 10/11 x64, double-click `Build Yatesium.cmd`. It downloads and runs
    the C++ workload and ATL, and the Windows SDK version Chromium needs with
    Debugging Tools. Windows asks for administrator approval for the installs.
 3. Clones this repository to `<drive>:\yatesium` and builds in `<drive>:\y`,
-   on the drive with the most free space (`-Drive X:` picks another).
+   on C: if it has room and otherwise on the drive with the most free space
+   (`-Drive X:` picks another).
 4. Writes the portable zip to `<drive>:\y\dist`.
 
 The first run downloads about 40 GB of source and compiles for several hours.
-Progress is in `<drive>:\y\build-output.log`. If the build stops, run the same
-file again: it resumes, and after a `git pull` it swaps in changed patches and
-recompiles only what they touch.
+The build runs as a hidden process and writes to `<drive>:\y\build-output.log`.
+Closing the window does not stop it.
+
+The window is a small controller. It reads one-word requests from
+`<drive>:\y\control\request.txt` and writes its state to `status.txt` in the
+same folder:
+
+| Request | Effect |
+| --- | --- |
+| `build` | `git pull`, then start or resume the build |
+| `stop` | Stop the running build |
+| `quit` | Stop the build and close the controller |
+
+Any other text is ignored. After a pull, changed patches are swapped in and
+only the files they touch are recompiled.
 
 ## Layout
 

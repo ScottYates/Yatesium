@@ -12,7 +12,8 @@
 #   4. Runs build.py. The first run downloads about 40 GB of Chromium source
 #      and compiles for several hours. Running this script again resumes.
 #
-# Everything goes into two folders on the drive with the most free space:
+# Everything goes into two folders, on C: if it has room and otherwise on the
+# drive with the most free space:
 #   <drive>:\yatesium   this repository
 #   <drive>:\y          Chromium source, build output, logs, finished zip
 
@@ -69,8 +70,14 @@ if (-not $Drive) {
     if ($existing) {
         $Drive = $existing.DeviceID
     } else {
-        $Drive = (Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' |
-            Sort-Object FreeSpace -Descending | Select-Object -First 1).DeviceID
+        # Prefer C: when it has room, otherwise the drive with the most space.
+        $system = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+        if ($system -and ($system.FreeSpace / 1GB) -ge $MinFreeGB) {
+            $Drive = 'C:'
+        } else {
+            $Drive = (Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' |
+                Sort-Object FreeSpace -Descending | Select-Object -First 1).DeviceID
+        }
     }
 }
 $Drive = $Drive.TrimEnd('\')
@@ -188,21 +195,139 @@ if (Test-Path "$repoDir\.git") {
 }
 
 # -- 4. Build ----------------------------------------------------------------
+#
+# The build runs as a hidden child process that writes to build-output.log.
+# This window stays open as a small controller. It accepts three requests,
+# each given by writing one word into <build folder>\control\request.txt:
+#   build   update the repository and start (or resume) the build
+#   stop    stop the running build
+#   quit    stop the build and close the controller
+# Nothing else is accepted, so the file cannot be used to run other commands.
+# The current state is written to control\status.txt every few seconds.
 
-$buildArgs = @("$repoDir\build.py", '--build-dir', $buildDir)
-if ($Jobs -gt 0) { $buildArgs += @('-j', "$Jobs") }
-Say "Starting the build. This takes hours. It is safe to close this window and run the script again later; the build resumes."
-# Compiler output on stderr must not stop the script, and the output is also
-# written to a file so progress can be checked without this window.
 $ErrorActionPreference = 'Continue'
+$env:PYTHONUNBUFFERED = '1'
 $outputLog = "$buildDir\build-output.log"
-& $python @buildArgs 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $outputLog -Append
-$code = $LASTEXITCODE
-if ($code -ne 0) {
-    Say "Log file: $logFile"
-    Fail "The build stopped with exit code $code. Fix the cause or ask for help with the log, then run this again to resume."
+$controlDir = "$buildDir\control"
+$requestFile = "$controlDir\request.txt"
+$statusFile = "$controlDir\status.txt"
+$pidFile = "$controlDir\build.pid"
+New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
+if (Test-Path $requestFile) { Remove-Item $requestFile -Force }
+
+function Write-Status($state, $detail) {
+    $lines = @("state=$state", "detail=$detail", "updated=$(Get-Date -Format o)")
+    try { Set-Content -Path $statusFile -Value $lines -Encoding ASCII } catch { }
 }
 
-$zip = Get-ChildItem "$buildDir\dist\*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-Say "Done. Portable browser: $($zip.FullName)"
+function Update-Repository {
+    & $git -C $repoDir -c core.autocrlf=false pull --ff-only 2>&1 | ForEach-Object { "$_" } | Out-File -FilePath $outputLog -Append -Encoding ASCII
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Start-Build {
+    $command = "`"$python`" `"$repoDir\build.py`" --build-dir `"$buildDir`""
+    if ($Jobs -gt 0) { $command += " -j $Jobs" }
+    $runner = "$buildDir\run-build.cmd"
+    Set-Content -Path $runner -Encoding ASCII -Value @(
+        '@echo off',
+        "echo ==== build started %DATE% %TIME% ==== >> `"$outputLog`"",
+        "$command >> `"$outputLog`" 2>&1",
+        'exit /b %ERRORLEVEL%')
+    $process = Start-Process -FilePath $env:ComSpec -ArgumentList @('/c', "`"$runner`"") -WindowStyle Hidden -PassThru
+    $null = $process.Handle   # keeps the exit code readable after the process ends
+    Set-Content -Path $pidFile -Value $process.Id -Encoding ASCII
+    Say "Build started (process $($process.Id)). Output: $outputLog"
+    return $process
+}
+
+function Find-RunningBuild {
+    # A build started by an earlier controller window keeps running after
+    # that window is closed. Pick it up again instead of starting a second.
+    if (-not (Test-Path $pidFile)) { return $null }
+    try {
+        $id = [int](([string](Get-Content -Path $pidFile -Raw)).Trim())
+        $process = Get-Process -Id $id -ErrorAction Stop
+        if ($process.ProcessName -ne 'cmd') { return $null }
+        $null = $process.Handle
+        Say "Found the build already running (process $id)."
+        return $process
+    } catch { return $null }
+}
+
+function Stop-Build($process) {
+    & taskkill.exe /T /F /PID $process.Id 2>&1 | Out-Null
+    Add-Content -Path $outputLog -Value "==== build stopped on request $(Get-Date -Format o) ====" -Encoding ASCII
+}
+
+function Get-LastLogLine {
+    try {
+        $tail = Get-Content -Path $outputLog -Tail 1 -ErrorAction Stop
+        if ($tail) { return "$tail" }
+    } catch { }
+    return ''
+}
+
+Say 'This window controls the build. Closing it does not stop a running build. Run the launcher again to get this window back.'
+$build = Find-RunningBuild
+if (-not $build) { $build = Start-Build }
+$lastShown = Get-Date
+$running = $true
+while ($running) {
+    Start-Sleep -Seconds 5
+
+    $request = ''
+    if (Test-Path $requestFile) {
+        try {
+            $request = ([string](Get-Content -Path $requestFile -Raw)).Trim().ToLower()
+            Remove-Item $requestFile -Force
+        } catch { $request = '' }
+    }
+
+    if ($build -and $build.HasExited) {
+        $code = $build.ExitCode
+        $build = $null
+        if ($code -eq 0) {
+            $zip = Get-ChildItem "$buildDir\dist\*.zip" -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            Write-Status 'succeeded' "$($zip.FullName)"
+            Say "Build finished. Portable browser: $($zip.FullName)"
+        } else {
+            Write-Status 'failed' "exit code $code"
+            Say "Build stopped with exit code $code. See $outputLog"
+        }
+    }
+
+    if ($request -eq 'build') {
+        if ($build) {
+            Say 'Build request ignored: a build is already running.'
+        } elseif (Update-Repository) {
+            $build = Start-Build
+        } else {
+            Write-Status 'failed' 'could not update the repository'
+            Say "Could not update $repoDir. See $outputLog"
+        }
+    } elseif ($request -eq 'stop' -or $request -eq 'quit') {
+        if ($build) {
+            Stop-Build $build
+            $build = $null
+            Write-Status 'stopped' 'stopped on request'
+            Say 'Build stopped on request.'
+        }
+        if ($request -eq 'quit') { $running = $false }
+    } elseif ($request) {
+        Say "Unknown request ignored: $request"
+    }
+
+    if ($build) {
+        $line = Get-LastLogLine
+        Write-Status 'building' $line
+        if (((Get-Date) - $lastShown).TotalSeconds -ge 60) {
+            if ($line.Length -gt 110) { $line = $line.Substring(0, 110) }
+            Say $line
+            $lastShown = Get-Date
+        }
+    }
+}
+Say 'Controller closed.'
 Stop-Transcript | Out-Null
