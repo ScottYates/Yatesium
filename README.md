@@ -131,10 +131,21 @@ uses. Upstream may delete more of it in later versions. When that happens,
 
 ## Building locally
 
-`python build.py` on Windows 10/11 x64 runs the same steps. It needs Visual
-Studio 2022 with "Desktop development with C++", the Windows SDK version named
-in Chromium's `build/vs_toolchain.py` with "Debugging Tools for Windows", git,
-about 100 GB of free disk and several hours.
+On Windows 10/11 x64, double-click `Build Yatesium.cmd`. It downloads and runs
+`local-build.ps1` from this repository, which:
+
+1. Checks memory (16 GB or more) and disk space (about 110 GB free).
+2. Installs what is missing: Git, Python, Visual Studio 2022 Build Tools with
+   the C++ workload and ATL, and the Windows SDK version Chromium needs with
+   Debugging Tools. Windows asks for administrator approval for the installs.
+3. Clones this repository to `<drive>:\yatesium` and builds in `<drive>:\y`,
+   on the drive with the most free space (`-Drive X:` picks another).
+4. Writes the portable zip to `<drive>:\y\dist`.
+
+The first run downloads about 40 GB of source and compiles for several hours.
+Progress is in `<drive>:\y\build-output.log`. If the build stops, run the same
+file again: it resumes, and after a `git pull` it swaps in changed patches and
+recompiles only what they touch.
 
 ## Layout
 
