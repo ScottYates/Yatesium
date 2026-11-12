@@ -159,8 +159,10 @@ class Builder:
                 'git', 'clone', '--depth', '1', '--branch', version,
                 CHROMIUM_URL, self.src,
                 cleanup=lambda: self.remove_tree(self.src))
+        # One download job per logical processor, between 8 and 32.
+        sync_jobs = max(8, min(32, os.cpu_count() or 8))
         self.run_with_retries('gclient.bat', 'sync', '--no-history',
-                              '--nohooks', '-D', '--jobs', '8')
+                              '--nohooks', '-D', '--jobs', str(sync_jobs))
         self.run_with_retries('gclient.bat', 'runhooks')
         self.mark('checkout')
 
