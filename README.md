@@ -97,6 +97,11 @@ Things already present in Yatesium are left out of the list. Nothing is read
 from another browser until the page is opened, and nothing is imported
 without the button. The other browser can stay open during the import.
 
+After an import, open `yatesium://apps` to see the web apps that are now
+installed. Each app there can be started, and its right-click menu creates or
+removes its desktop and Start menu shortcuts. Imported extensions are listed
+on `yatesium://extensions`.
+
 ## Google sign-in and sync
 
 Google only lets a browser sign in and sync with credentials that belong to
