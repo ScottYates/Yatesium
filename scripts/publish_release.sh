@@ -37,7 +37,12 @@ if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
   gh release upload "$tag" "$zip" --repo "$GITHUB_REPOSITORY" --clobber
   gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes "$notes"
 else
+  # The workflow token may not tag a commit whose workflow files differ from
+  # the default branch. In that case the tag goes on the default branch; the
+  # notes still name the commit that was built.
   gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" \
-    --target "$commit" --title "Yatesium $version" --notes "$notes"
+    --target "$commit" --title "Yatesium $version" --notes "$notes" ||
+  gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" \
+    --title "Yatesium $version" --notes "$notes"
 fi
 echo "Published $tag"
