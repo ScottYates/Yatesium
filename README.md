@@ -113,9 +113,14 @@ To turn it off again, clear the three fields and relaunch.
 
 Things to know:
 
-- The values are stored in `Data\User Data\Local State`, unencrypted, and
-  the client secret is visible on `yatesium://version` in the command line.
-  Anyone who gets the folder gets the credentials.
+- The values are stored encrypted in `Data\User Data\Local State`, using
+  Windows data protection (DPAPI). Only your Windows account on this computer
+  can decrypt them. If the folder moves to another computer or account, the
+  three fields come up empty and have to be entered again.
+- The values never appear on a command line: not the browser's own, not on
+  `yatesium://version`, and not in the processes the browser starts.
+- The flags page shows the values in its text fields to whoever is using the
+  browser under your Windows account.
 - Google's terms say the credentials are for your own use. Do not put them
   into a build you hand to others. The build can still take them from
   `GOOGLE_API_KEY`, `GOOGLE_DEFAULT_CLIENT_ID` and

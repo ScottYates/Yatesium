@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
-index 0d8a6e98a..52e3893fa 100644
+index 0d8a6e98a..70859d247 100644
 --- a/chrome/browser/about_flags.cc
 +++ b/chrome/browser/about_flags.cc
 @@ -234,6 +234,7 @@
@@ -17,21 +17,21 @@ index 0d8a6e98a..52e3893fa 100644
 +    // Yatesium: the user's own Google API credentials, for sign-in and sync.
 +    {"google-api-key", flag_descriptions::kYatesiumGoogleApiKeyName,
 +     flag_descriptions::kYatesiumGoogleApiKeyDescription, kOsAll,
-+     STRING_VALUE_TYPE(switches::kGoogleApiKey, "")},
++     STRING_VALUE_TYPE(switches::kYatesiumGoogleApiKey, "")},
 +    {"google-oauth-client-id",
 +     flag_descriptions::kYatesiumGoogleClientIdName,
 +     flag_descriptions::kYatesiumGoogleClientIdDescription, kOsAll,
-+     STRING_VALUE_TYPE(switches::kOAuth2ClientID, "")},
++     STRING_VALUE_TYPE(switches::kYatesiumGoogleClientId, "")},
 +    {"google-oauth-client-secret",
 +     flag_descriptions::kYatesiumGoogleClientSecretName,
 +     flag_descriptions::kYatesiumGoogleClientSecretDescription, kOsAll,
-+     STRING_VALUE_TYPE(switches::kOAuth2ClientSecret, "")},
++     STRING_VALUE_TYPE(switches::kYatesiumGoogleClientSecret, "")},
 +
      {"variations-seed-corpus", flag_descriptions::kVariationsSeedCorpusName,
       flag_descriptions::kVariationsSeedCorpusDescription, kOsAll,
       STRING_VALUE_TYPE(variations::switches::kVariationsSeedCorpus, "")},
 diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
-index 33fab3506..4d77e73cb 100644
+index 33fab3506..8e518dc33 100644
 --- a/chrome/browser/flag_descriptions.h
 +++ b/chrome/browser/flag_descriptions.h
 @@ -8770,6 +8770,21 @@ inline constexpr char kEnableManagementPromotionBannerDescription[] =
@@ -50,73 +50,303 @@ index 33fab3506..4d77e73cb 100644
 +inline constexpr char kYatesiumGoogleClientSecretName[] =
 +    "Google OAuth client secret";
 +inline constexpr char kYatesiumGoogleClientSecretDescription[] =
-+    "The client secret that belongs to the OAuth client ID. It is stored "
-+    "unencrypted in the Data folder.";
++    "The client secret that belongs to the OAuth client ID. The three Google "
++    "values are stored encrypted for your Windows account.";
 +
  inline constexpr char kVariationsSeedCorpusName[] = "Variations seed corpus";
  inline constexpr char kVariationsSeedCorpusDescription[] =
      "The value of the 'corpus' parameter in the variations seed request. "
+diff --git a/chrome/browser/metrics/chrome_feature_list_creator.cc b/chrome/browser/metrics/chrome_feature_list_creator.cc
+index f45f66f62..c2ea89527 100644
+--- a/chrome/browser/metrics/chrome_feature_list_creator.cc
++++ b/chrome/browser/metrics/chrome_feature_list_creator.cc
+@@ -37,6 +37,8 @@
+ #include "components/variations/service/variations_service.h"
+ #include "components/variations/variations_switches.h"
+ #include "components/webui/flags/pref_service_flags_storage.h"
++#include "google_apis/api_key_cache.h"
++#include "google_apis/gaia/gaia_switches.h"
+ #include "content/public/common/content_switch_dependent_feature_overrides.h"
+ #include "content/public/common/content_switches.h"
+ #include "services/network/public/cpp/network_switches.h"
+@@ -219,6 +221,19 @@ void ChromeFeatureListCreator::ConvertFlagsToSwitches() {
+   about_flags::ConvertFlagsToSwitches(&flags_storage,
+                                       base::CommandLine::ForCurrentProcess(),
+                                       flags_ui::kAddSentinels);
++
++  // Yatesium: the Google credentials from the flags page arrive as switches.
++  // Hand them to the API key code and take them off the command line, so they
++  // show up neither on the version page nor in anything started from here.
++  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  google_apis::SetUserSuppliedCredentials(
++      command_line->GetSwitchValueASCII(switches::kYatesiumGoogleApiKey),
++      command_line->GetSwitchValueASCII(switches::kYatesiumGoogleClientId),
++      command_line->GetSwitchValueASCII(
++          switches::kYatesiumGoogleClientSecret));
++  command_line->RemoveSwitch(switches::kYatesiumGoogleApiKey);
++  command_line->RemoveSwitch(switches::kYatesiumGoogleClientId);
++  command_line->RemoveSwitch(switches::kYatesiumGoogleClientSecret);
+ }
+ 
+ void ChromeFeatureListCreator::CreateNetworkTimeTracker() {
+diff --git a/components/webui/flags/BUILD.gn b/components/webui/flags/BUILD.gn
+index 3ff5c2d8b..37b03d5ca 100644
+--- a/components/webui/flags/BUILD.gn
++++ b/components/webui/flags/BUILD.gn
+@@ -20,6 +20,11 @@ static_library("flags") {
+     "pref_service_flags_storage.h",
+   ]
+ 
++  if (is_win) {
++    # Yatesium: pref_service_flags_storage.cc uses Windows data protection.
++    libs = [ "crypt32.lib" ]
++  }
++
+   deps = [
+     ":switches",
+     "//base",
+diff --git a/components/webui/flags/pref_service_flags_storage.cc b/components/webui/flags/pref_service_flags_storage.cc
+index dda7d5c53..580120675 100644
+--- a/components/webui/flags/pref_service_flags_storage.cc
++++ b/components/webui/flags/pref_service_flags_storage.cc
+@@ -4,7 +4,10 @@
+ 
+ #include "components/webui/flags/pref_service_flags_storage.h"
+ 
++#include <string_view>
++
+ #include "base/logging.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
+ #include "components/pref_registry/pref_registry_syncable.h"
+@@ -13,8 +16,81 @@
+ #include "components/prefs/scoped_user_pref_update.h"
+ #include "components/webui/flags/flags_ui_pref_names.h"
+ 
++#if BUILDFLAG(IS_WIN)
++#include <windows.h>
++
++#include <dpapi.h>
++#endif
++
+ namespace flags_ui {
+ 
++namespace {
++
++// Yatesium: the values of these flags are secrets. They are stored encrypted
++// with Windows data protection (DPAPI), which ties them to the Windows
++// account on this computer. Stored form: this prefix, then the hex blob.
++constexpr char kProtectedPrefix[] = "dpapi:";
++
++bool IsProtectedFlag(std::string_view internal_entry_name) {
++  return internal_entry_name == "google-api-key" ||
++         internal_entry_name == "google-oauth-client-id" ||
++         internal_entry_name == "google-oauth-client-secret";
++}
++
++#if BUILDFLAG(IS_WIN)
++// Returns an empty string if the value is empty or cannot be encrypted, so a
++// secret is never written in the clear.
++std::string ProtectValue(const std::string& plain) {
++  if (plain.empty()) {
++    return std::string();
++  }
++  DATA_BLOB input;
++  input.pbData =
++      const_cast<BYTE*>(reinterpret_cast<const BYTE*>(plain.data()));
++  input.cbData = static_cast<DWORD>(plain.size());
++  DATA_BLOB output = {};
++  if (!::CryptProtectData(&input, L"Yatesium", nullptr, nullptr, nullptr,
++                          CRYPTPROTECT_UI_FORBIDDEN, &output)) {
++    return std::string();
++  }
++  const std::string blob(reinterpret_cast<const char*>(output.pbData),
++                         output.cbData);
++  ::LocalFree(output.pbData);
++  return kProtectedPrefix + base::HexEncode(blob);
++}
++
++// Returns an empty string for anything that is not a value this account on
++// this computer encrypted.
++std::string UnprotectValue(const std::string& stored) {
++  const std::string_view prefix(kProtectedPrefix);
++  if (stored.size() <= prefix.size() ||
++      std::string_view(stored).substr(0, prefix.size()) != prefix) {
++    return std::string();
++  }
++  std::string blob;
++  if (!base::HexStringToString(std::string_view(stored).substr(prefix.size()),
++                               &blob) ||
++      blob.empty()) {
++    return std::string();
++  }
++  DATA_BLOB input;
++  input.pbData = reinterpret_cast<BYTE*>(blob.data());
++  input.cbData = static_cast<DWORD>(blob.size());
++  DATA_BLOB output = {};
++  if (!::CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr,
++                            CRYPTPROTECT_UI_FORBIDDEN, &output)) {
++    return std::string();
++  }
++  std::string plain(reinterpret_cast<const char*>(output.pbData),
++                    output.cbData);
++  ::SecureZeroMemory(output.pbData, output.cbData);
++  ::LocalFree(output.pbData);
++  return plain;
++}
++#endif  // BUILDFLAG(IS_WIN)
++
++}  // namespace
++
+ PrefServiceFlagsStorage::PrefServiceFlagsStorage(PrefService* prefs)
+     : prefs_(prefs) {}
+ 
+@@ -63,12 +139,23 @@ void PrefServiceFlagsStorage::SetOriginListFlag(
+ 
+ std::string PrefServiceFlagsStorage::GetStringFlag(
+     const std::string& internal_entry_name) const {
++#if BUILDFLAG(IS_WIN)
++  if (IsProtectedFlag(internal_entry_name)) {
++    return UnprotectValue(GetOriginListFlag(internal_entry_name));
++  }
++#endif
+   return GetOriginListFlag(internal_entry_name);
+ }
+ 
+ void PrefServiceFlagsStorage::SetStringFlag(
+     const std::string& internal_entry_name,
+     const std::string& string_value) {
++#if BUILDFLAG(IS_WIN)
++  if (IsProtectedFlag(internal_entry_name)) {
++    SetOriginListFlag(internal_entry_name, ProtectValue(string_value));
++    return;
++  }
++#endif
+   SetOriginListFlag(internal_entry_name, string_value);
+ }
+ 
 diff --git a/google_apis/api_key_cache.cc b/google_apis/api_key_cache.cc
-index d4ec88d82..c76cadc05 100644
+index d4ec88d82..ac9f1688e 100644
 --- a/google_apis/api_key_cache.cc
 +++ b/google_apis/api_key_cache.cc
-@@ -140,9 +140,12 @@ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys)
-   GaiaConfig* gaia_config = GaiaConfig::GetInstance();
+@@ -17,6 +17,7 @@
+ #include "base/logging.h"
+ #include "base/metrics/field_trial_params.h"
+ #include "base/metrics/histogram_functions.h"
++#include "base/no_destructor.h"
+ #include "base/strings/stringize_macros.h"
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
+@@ -33,6 +34,19 @@ namespace google_apis {
  
-   std::string api_key_from_feature = GetAPIKeyOverrideViaFeature();
-+  // Yatesium: the API key and the default OAuth client can be given on the
-+  // command line, which is how the entries on the flags page reach this code.
-   api_key_ = CalculateKeyValue(default_api_keys.google_api_key,
-                                STRINGIZE_NO_EXPANSION(GOOGLE_API_KEY),
--                               api_key_from_feature, nullptr, std::string(),
-+                               api_key_from_feature, ::switches::kGoogleApiKey,
-+                               std::string(),
+ namespace {
+ 
++// Yatesium: credentials the user entered on the flags page. The browser hands
++// them over at startup, before the first ApiKeyCache is created.
++struct UserSuppliedCredentials {
++  std::string api_key;
++  std::string client_id;
++  std::string client_secret;
++};
++
++UserSuppliedCredentials& GetUserSuppliedCredentials() {
++  static base::NoDestructor<UserSuppliedCredentials> credentials;
++  return *credentials;
++}
++
+ const base::FeatureParam<std::string> kOverrideAPIKeyFeatureParam{
+     &kOverrideAPIKeyFeature, /*name=*/"api_key", /*default_value=*/""};
+ 
+@@ -132,6 +146,15 @@ static std::string CalculateKeyValue(
+ 
+ BASE_FEATURE(kOverrideAPIKeyFeature, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
++void SetUserSuppliedCredentials(const std::string& api_key,
++                                const std::string& client_id,
++                                const std::string& client_secret) {
++  UserSuppliedCredentials& credentials = GetUserSuppliedCredentials();
++  credentials.api_key = api_key;
++  credentials.client_id = client_id;
++  credentials.client_secret = client_secret;
++}
++
+ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys)
+     : is_initialized_using_google_chrome_keys_(
+           default_api_keys.is_using_google_chrome_keys) {
+@@ -146,6 +169,10 @@ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys)
                                 environment.get(), command_line, gaia_config,
                                 default_api_keys.allow_override_via_environment,
                                 default_api_keys.allow_unset_values);
-@@ -255,14 +258,16 @@ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys)
++  const UserSuppliedCredentials& user_supplied = GetUserSuppliedCredentials();
++  if (!user_supplied.api_key.empty()) {
++    api_key_ = user_supplied.api_key;
++  }
+   base::UmaHistogramBoolean("Signin.APIKeyMatchesFeatureOnStartup",
+                             api_key_from_feature == api_key_);
  
-   std::string default_client_id = CalculateKeyValue(
-       default_api_keys.google_default_client_id,
--      STRINGIZE_NO_EXPANSION(GOOGLE_DEFAULT_CLIENT_ID), std::string(), nullptr,
--      std::string(), environment.get(), command_line, gaia_config,
-+      STRINGIZE_NO_EXPANSION(GOOGLE_DEFAULT_CLIENT_ID), std::string(),
-+      ::switches::kOAuth2ClientID, std::string(), environment.get(),
-+      command_line, gaia_config,
-       default_api_keys.allow_override_via_environment,
-       default_api_keys.allow_unset_values);
-   std::string default_client_secret = CalculateKeyValue(
-       default_api_keys.google_default_client_secret,
-       STRINGIZE_NO_EXPANSION(GOOGLE_DEFAULT_CLIENT_SECRET), std::string(),
--      nullptr, std::string(), environment.get(), command_line, gaia_config,
-+      ::switches::kOAuth2ClientSecret, std::string(), environment.get(),
-+      command_line, gaia_config,
+@@ -266,6 +293,13 @@ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys)
        default_api_keys.allow_override_via_environment,
        default_api_keys.allow_unset_values);
  
++  if (!user_supplied.client_id.empty()) {
++    default_client_id = user_supplied.client_id;
++  }
++  if (!user_supplied.client_secret.empty()) {
++    default_client_secret = user_supplied.client_secret;
++  }
++
+   // We currently only allow overriding the baked-in values for the
+   // default OAuth2 client ID and secret using a command-line
+   // argument and gaia config, since that is useful to enable testing against
+diff --git a/google_apis/api_key_cache.h b/google_apis/api_key_cache.h
+index ae32ac609..00e63e60f 100644
+--- a/google_apis/api_key_cache.h
++++ b/google_apis/api_key_cache.h
+@@ -19,6 +19,14 @@ struct DefaultApiKeys;
+ 
+ COMPONENT_EXPORT(GOOGLE_APIS) BASE_DECLARE_FEATURE(kOverrideAPIKeyFeature);
+ 
++// Yatesium: sets the Google API key and the default OAuth client that the
++// user entered on the flags page. Empty values are ignored. Must be called
++// before the first ApiKeyCache is created.
++COMPONENT_EXPORT(GOOGLE_APIS)
++void SetUserSuppliedCredentials(const std::string& api_key,
++                                const std::string& client_id,
++                                const std::string& client_secret);
++
+ // This is used as a lazy instance to determine keys once and cache them.
+ class COMPONENT_EXPORT(GOOGLE_APIS) ApiKeyCache {
+  public:
 diff --git a/google_apis/gaia/gaia_switches.cc b/google_apis/gaia/gaia_switches.cc
-index 1a0cfa0af..1ad22edd9 100644
+index 1a0cfa0af..56099d62f 100644
 --- a/google_apis/gaia/gaia_switches.cc
 +++ b/google_apis/gaia/gaia_switches.cc
-@@ -13,6 +13,8 @@ const char kGaiaUrl[]                       = "gaia-url";
+@@ -13,6 +13,11 @@ const char kGaiaUrl[]                       = "gaia-url";
  const char kGoogleApisUrl[]                 = "google-apis-url";
  const char kLsoUrl[]                        = "lso-url";
  const char kOAuthAccountManagerUrl[] = "oauth-account-manager-url";
-+// Yatesium: the Google API key, set from the flags page.
-+const char kGoogleApiKey[] = "google-api-key";
++// Yatesium: carry the credentials from the flags page to startup code, which
++// takes them off the command line again.
++const char kYatesiumGoogleApiKey[] = "yatesium-google-api-key";
++const char kYatesiumGoogleClientId[] = "yatesium-google-client-id";
++const char kYatesiumGoogleClientSecret[] = "yatesium-google-client-secret";
  const char kOAuth2ClientID[] = "oauth2-client-id";
  const char kOAuth2ClientSecret[] = "oauth2-client-secret";
  
 diff --git a/google_apis/gaia/gaia_switches.h b/google_apis/gaia/gaia_switches.h
-index 7ac4bcd5f..53d0dad86 100644
+index 7ac4bcd5f..b4c74f521 100644
 --- a/google_apis/gaia/gaia_switches.h
 +++ b/google_apis/gaia/gaia_switches.h
-@@ -38,6 +38,9 @@ COMPONENT_EXPORT(GOOGLE_APIS) extern const char kLsoUrl[];
+@@ -38,6 +38,12 @@ COMPONENT_EXPORT(GOOGLE_APIS) extern const char kLsoUrl[];
  // "https://oauthaccountmanager.googleapis.com".
  COMPONENT_EXPORT(GOOGLE_APIS) extern const char kOAuthAccountManagerUrl[];
  
-+// Yatesium: specifies the Google API key.
-+COMPONENT_EXPORT(GOOGLE_APIS) extern const char kGoogleApiKey[];
++// Yatesium: carry the credentials from the flags page to startup code, which
++// takes them off the command line again. They are not meant to be typed.
++COMPONENT_EXPORT(GOOGLE_APIS) extern const char kYatesiumGoogleApiKey[];
++COMPONENT_EXPORT(GOOGLE_APIS) extern const char kYatesiumGoogleClientId[];
++COMPONENT_EXPORT(GOOGLE_APIS) extern const char kYatesiumGoogleClientSecret[];
 +
  // Specifies custom OAuth2 client id for testing purposes.
  COMPONENT_EXPORT(GOOGLE_APIS) extern const char kOAuth2ClientID[];
