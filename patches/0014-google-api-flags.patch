@@ -31,10 +31,10 @@ index 0d8a6e98a..70859d247 100644
       flag_descriptions::kVariationsSeedCorpusDescription, kOsAll,
       STRING_VALUE_TYPE(variations::switches::kVariationsSeedCorpus, "")},
 diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
-index 33fab3506..8e518dc33 100644
+index 33fab3506..cd1f00816 100644
 --- a/chrome/browser/flag_descriptions.h
 +++ b/chrome/browser/flag_descriptions.h
-@@ -8770,6 +8770,21 @@ inline constexpr char kEnableManagementPromotionBannerDescription[] =
+@@ -8770,6 +8770,23 @@ inline constexpr char kEnableManagementPromotionBannerDescription[] =
      "Enables showing the management promotion banner on chrome://management "
      "page.";
  
@@ -50,7 +50,9 @@ index 33fab3506..8e518dc33 100644
 +inline constexpr char kYatesiumGoogleClientSecretName[] =
 +    "Google OAuth client secret";
 +inline constexpr char kYatesiumGoogleClientSecretDescription[] =
-+    "The client secret that belongs to the OAuth client ID. The three Google "
++    "The client secret that belongs to the OAuth client ID. Once stored it "
++    "is not shown again: the field reads \"already entered\". Type a new "
++    "secret to replace it, or clear the field to remove it. The three Google "
 +    "values are stored encrypted for your Windows account.";
 +
  inline constexpr char kVariationsSeedCorpusName[] = "Variations seed corpus";
@@ -105,6 +107,52 @@ index 3ff5c2d8b..37b03d5ca 100644
    deps = [
      ":switches",
      "//base",
+diff --git a/components/webui/flags/flags_state.cc b/components/webui/flags/flags_state.cc
+index 1d89b2754..0b053d623 100644
+--- a/components/webui/flags/flags_state.cc
++++ b/components/webui/flags/flags_state.cc
+@@ -247,6 +247,15 @@ std::string GetCombinedOriginListValue(const FlagsStorage& flags_storage,
+   return CombineAndSanitizeOriginLists(existing_value, new_value);
+ }
+ 
++// Yatesium: the flags page never shows the stored value of these flags. It
++// shows this text when a value is stored. To change the value the user types
++// a new one; to remove it the user clears the field.
++constexpr char kAlreadyEnteredText[] = "already entered";
++
++bool IsWriteOnlyStringFlag(std::string_view internal_entry_name) {
++  return internal_entry_name == "google-oauth-client-secret";
++}
++
+ std::string GetCombinedStringValue(const FlagsStorage& flags_storage,
+                                    const base::CommandLine& command_line,
+                                    const std::string& internal_entry_name,
+@@ -511,6 +520,10 @@ void FlagsState::SetOriginListFlag(const std::string& internal_name,
+ void FlagsState::SetStringFlag(const std::string& internal_name,
+                                const std::string& value,
+                                FlagsStorage* flags_storage) {
++  // Yatesium: the placeholder coming back from the page means "unchanged".
++  if (IsWriteOnlyStringFlag(internal_name) && value == kAlreadyEnteredText) {
++    return;
++  }
+   flags_storage->SetStringFlag(internal_name, value);
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+@@ -739,6 +752,14 @@ void FlagsState::GetFlagFeatureEntries(
+         break;
+       case FeatureEntry::STRING_VALUE:
+         data.Set("enabled", !is_default_value);
++        if (IsWriteOnlyStringFlag(entry.internal_name)) {
++          // Yatesium: a stored secret is not shown again.
++          data.Set("string_value",
++                   flags_storage->GetStringFlag(entry.internal_name).empty()
++                       ? std::string()
++                       : std::string(kAlreadyEnteredText));
++          break;
++        }
+         data.Set("string_value",
+                  GetCombinedStringValue(
+                      *flags_storage, *base::CommandLine::ForCurrentProcess(),
 diff --git a/components/webui/flags/pref_service_flags_storage.cc b/components/webui/flags/pref_service_flags_storage.cc
 index dda7d5c53..580120675 100644
 --- a/components/webui/flags/pref_service_flags_storage.cc

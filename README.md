@@ -119,8 +119,9 @@ Things to know:
   three fields come up empty and have to be entered again.
 - The values never appear on a command line: not the browser's own, not on
   `yatesium://version`, and not in the processes the browser starts.
-- The flags page shows the values in its text fields to whoever is using the
-  browser under your Windows account.
+- The client secret is not shown again once it is stored. Its field reads
+  "already entered". Type a new secret to replace it, or clear the field to
+  remove it. The API key and client ID stay readable on the flags page.
 - Google's terms say the credentials are for your own use. Do not put them
   into a build you hand to others. The build can still take them from
   `GOOGLE_API_KEY`, `GOOGLE_DEFAULT_CLIENT_ID` and
