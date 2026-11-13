@@ -10,6 +10,8 @@ plus a small patch set:
 - Its own identity: Yatesium name and logo, `yatesium.exe` and matching
   file names, `yatesium://` internal pages, and no Chrome or Chromium product
   name in the interface. See "Identity" below for what is left.
+- No telemetry, no ad-tracking APIs and no Safe Browsing. See "Telemetry and
+  ad tracking" below.
 - Standard Chromium features otherwise, including H.264/AAC media support.
 
 The pinned Chromium version is in `chromium_version.txt`.
@@ -18,9 +20,9 @@ The pinned Chromium version is in `chromium_version.txt`.
 
 The patches are checked against the pinned Chromium source: every patch
 applies cleanly and the string rebrand keeps all translations
-(`scripts/check_patches.py`). The browser has not been compiled yet. The first
-run of the build workflow is the first compile, so expect to fix a problem or
-two there.
+(`scripts/check_patches.py`). Patches 0001 to 0010 have been compiled, on
+GitHub Actions and locally. A patch added after that is uncompiled until the
+next build finishes.
 
 ## Building on GitHub Actions
 
@@ -88,6 +90,33 @@ passes a command-line switch. The other sources Chromium has are removed:
 Still present: the `initial_preferences` file read on a profile's first run,
 and Chromium's prompts that offer to reset settings it thinks were tampered
 with.
+
+## Telemetry and ad tracking
+
+Removed or turned off in the source:
+
+- Usage statistics (UMA and UKM). Reporting cannot be turned on, including by
+  the `--force-enable-metrics-reporting` switch.
+- Crash report upload. Consent is always "no", and the consent lookup in the
+  registry is gone.
+- Domain Reliability, which reports connection errors for Google sites.
+- Safe Browsing. It reads as off everywhere, so no URL, download or password
+  checks are sent to Google and the blocklists are not downloaded. The
+  setting in `yatesium://settings/security` has no effect. Yatesium does not
+  warn about phishing or malware sites; a blocking extension can cover that.
+- The Reporting API and Network Error Logging, which let a site ask the
+  browser to send it error and crash reports. Off by default; to turn them
+  back on, start with `--enable-features=Reporting,NetworkErrorLogging`.
+- Link `ping` tracking (hyperlink auditing). Off by default.
+- Ad APIs. Chromium 157 no longer contains Topics, Protected Audience or
+  Attribution Reporting. The two switches left over for them are set to off.
+
+Not changed, because they are features and not reporting:
+
+- Third-party cookies follow the Chromium default and the user's setting.
+- Requests to Google services that a feature needs: search suggestions for
+  the chosen search engine, translate, online spellcheck, and the component
+  updater.
 
 ## Identity
 
@@ -195,6 +224,7 @@ only the files they touch are recompiled.
 | `scripts/rebrand.py` | Renames the product in UI strings and translations |
 | `patches/0006`, `0007` | Binary file names and the `yatesium://` address bar |
 | `patches/0008`-`0010` | No policy, no remote experiments, no outside extension installs |
+| `patches/0011`, `0012` | No telemetry, no Safe Browsing |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |
