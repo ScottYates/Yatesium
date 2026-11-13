@@ -73,7 +73,31 @@ Limits:
   user account. If you move the folder to another PC or account, bookmarks,
   history, settings and extensions come along, but saved passwords and
   logged-in sessions do not.
-- There is no auto-update. Update by building and extracting a new zip.
+- It updates itself from this repository's releases. See "Updates" below.
+
+## Updates
+
+On start the browser runs `update.ps1` from its own folder, hidden. The
+script does this:
+
+1. At most once a day, asks the GitHub API for the latest release of this
+   repository. This is the only request it makes when there is nothing new.
+2. If the release is newer than `version.txt`, downloads the zip to
+   `Data\Update` and checks it against the SHA-256 that GitHub publishes for
+   the file. A zip that does not match is discarded.
+3. Waits until every `yatesium.exe` from this folder has closed, then moves
+   the old program files out and the new ones in. If that fails part way,
+   the old files are moved back. `Data` is not touched.
+
+The next start runs the new version. `Data\Update\update.log` records what
+happened.
+
+- To check right away, run `Update Yatesium.cmd`.
+- To turn automatic updates off, create an empty file `Data\no-update.txt`.
+  Deleting `update.ps1` also works.
+
+The update is trusted because it comes from this repository over HTTPS and
+matches the published hash. The zip is not code-signed.
 
 ## Where settings can come from
 
@@ -120,6 +144,7 @@ Removed or turned off in the source:
 Not changed, because they are features and not reporting:
 
 - Third-party cookies follow the Chromium default and the user's setting.
+- The update check: one request a day to the GitHub API. See "Updates".
 - Requests to Google services that a feature needs: search suggestions for
   the chosen search engine, translate, online spellcheck, and the component
   updater.
@@ -231,6 +256,8 @@ only the files they touch are recompiled.
 | `patches/0006`, `0007` | Binary file names and the `yatesium://` address bar |
 | `patches/0008`-`0010` | No policy, no remote experiments, no outside extension installs |
 | `patches/0011`, `0012` | No telemetry, no Safe Browsing |
+| `patches/0013` | Starts the updater script when the browser starts |
+| `portable/` | Updater script and its launcher, copied into the zip |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |

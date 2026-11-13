@@ -47,11 +47,20 @@ Start the browser with yatesium.exe.
 
 All browser data (profile, settings, extensions, cache) is stored in the
 "Data" folder next to yatesium.exe. The folder is created on first start.
-To update, extract a newer Yatesium zip over this folder. "Data" is kept.
 To start fresh, close the browser and delete "Data".
+
+Updates: once a day the browser asks GitHub whether a newer release exists.
+A newer release is downloaded to "Data\\Update" and installed after the
+browser is closed. "Data" is kept. To check right away, run
+"Update Yatesium.cmd". To turn automatic updates off, create an empty file
+"Data\\no-update.txt".
 
 Open-source licenses: yatesium://credits
 '''
+
+
+# Files from portable/ that are added to the package as they are.
+PORTABLE = ('update.ps1', 'Update Yatesium.cmd')
 
 
 def read_text(name):
@@ -104,13 +113,17 @@ def main():
                          compresslevel=9) as archive:
         for name in sorted(files):
             archive.write(files[name], 'Yatesium/' + name)
+        for name in PORTABLE:
+            archive.write(ROOT / 'portable' / name, 'Yatesium/' + name)
         archive.writestr('Yatesium/README.txt', README % {'version': version})
+        # The updater compares this with the tag of the latest release.
+        archive.writestr('Yatesium/version.txt', version + '\n')
     leftovers = [name for name in sorted(files) if 'chrom' in name.lower()]
     if leftovers:
         print('Warning: packaged files still named after Chrome: ' +
               ', '.join(leftovers))
     print('Packaged %d files into %s (%.0f MB)' %
-          (len(files) + 1, zip_path, zip_path.stat().st_size / 1e6))
+          (len(files) + len(PORTABLE) + 2, zip_path, zip_path.stat().st_size / 1e6))
 
 
 if __name__ == '__main__':
