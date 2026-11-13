@@ -33,15 +33,21 @@ next build finishes.
    workflow".
 3. Wait. The build is split into stages of up to 6 hours that run one after
    another. A full build takes several stages.
-4. Download the `yatesium-portable` artifact from the finished run.
+4. Download the zip from the repository's Releases page. A build that
+   finishes publishes it there, as `v<Chromium version>-<revision>`. The same
+   zip is also the `yatesium-portable` artifact of the run.
 
 If a run fails after the Chromium checkout, it still saves its build folder
 for 3 days. To continue from it after pushing a fix, run the workflow again
 and enter the failed run's number (from its URL) in "resume_run_id". Changed
 patches are swapped in and only the affected files are recompiled.
 
-To publish a release instead, push a tag such as `v157.0.8103.79-1`. The same
-workflow runs and attaches the zip to a GitHub release.
+The revision is the number in `revision.txt`. Raise it when the patches
+change, so the new build gets its own release. Building the same revision
+again replaces the zip of that release.
+
+To publish the zip of an earlier run without building again, run the
+`publish` workflow and enter that run's number.
 
 Optional: for Google sign-in and sync, create your own Google API keys and add
 them as repository secrets named `GOOGLE_API_KEY`, `GOOGLE_DEFAULT_CLIENT_ID`

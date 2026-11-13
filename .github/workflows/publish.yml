@@ -1,0 +1,36 @@
+# Publishes the zip from a finished build run as a GitHub release, without
+# building again. Start it from the Actions tab ("Run workflow").
+name: publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: The build run to publish (the number in the run's URL).
+        type: string
+        required: true
+      tag:
+        description: Release tag, such as v157.0.8103.79-2. Leave empty to use the version in the zip's file name.
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download the zip and publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name yatesium-portable --dir dist
+          commit=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .head_sha)
+          scripts/publish_release.sh dist "$commit" "$TAG"

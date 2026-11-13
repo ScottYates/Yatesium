@@ -1,7 +1,9 @@
 # Builds the Yatesium portable zip for Windows x64.
 #
 # Start it from the Actions tab ("Run workflow"), or push a tag named v*.
-# A run started from a tag also publishes the zip as a GitHub release.
+# A build that finishes publishes the zip as a GitHub release. The release is
+# named after the Chromium version and revision.txt; building the same
+# revision again replaces that release's zip.
 #
 # The repository must be public: the build uses far more runner time and
 # artifact storage than the free allowance for private repositories.
@@ -126,16 +128,12 @@ jobs:
             echo "The build did not finish within 12 stages."
             exit 1
           fi
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: yatesium-portable
           path: dist
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.zip \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Yatesium ${GITHUB_REF_NAME#v}" \
-            --notes "Portable build for Windows x64. Extract the zip and run yatesium.exe."
+        run: scripts/publish_release.sh dist "$GITHUB_SHA"
