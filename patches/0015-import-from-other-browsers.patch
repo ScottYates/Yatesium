@@ -1,0 +1,1222 @@
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 814b9d649..60de87615 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1611,6 +1611,11 @@ source_set("core") {
+       "chrome_browser_main_win.cc",
+       "chrome_browser_main_win.h",
+       "font_prewarmer_tab_helper.cc",
++
++      # Yatesium: the import page.
++      "yatesium_import.cc",
++      "yatesium_import.h",
++
+       "fullscreen_win.cc",
+       "icon_loader_win.cc",
+       "memory_details_win.cc",
+diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
+index 1651c5def..54a0964a2 100644
+--- a/chrome/browser/chrome_browser_main.cc
++++ b/chrome/browser/chrome_browser_main.cc
+@@ -251,6 +251,7 @@
+ #include "chrome/browser/win/browser_util.h"
+ #include "chrome/browser/win/chrome_select_file_dialog_factory.h"
+ #include "chrome/browser/win/parental_controls.h"
++#include "chrome/browser/yatesium_import.h"
+ #include "ui/shell_dialogs/select_file_dialog.h"
+ 
+ #if BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+@@ -1332,6 +1333,13 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
+     if (!base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kApp) &&
+         !base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kAppId)) {
+       browser_creator_->AddFirstRunTabs(master_prefs_->new_tabs);
++#if BUILDFLAG(IS_WIN)
++      // Yatesium: on first run, offer to import from another browser if one
++      // has data on this computer.
++      if (yatesium::OtherBrowserDataExists()) {
++        browser_creator_->AddFirstRunTabs({GURL(yatesium::kImportURL)});
++      }
++#endif
+     }
+   }
+ #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+index d79e9dfdb..57d21b5ee 100644
+--- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
++++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+@@ -179,6 +179,7 @@
+ 
+ #if BUILDFLAG(IS_WIN)
+ #include "chrome/browser/ui/webui/conflicts/conflicts_ui.h"
++#include "chrome/browser/yatesium_import.h"
+ #include "chrome/browser/ui/webui/default_browser/visual_guided_setter_ui.h"
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+@@ -290,6 +291,10 @@ void RegisterChromeWebUIConfigs() {
+       std::make_unique<content_settings_internals::ContentSettingsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<ConstrainedWebDialogUIConfig>());
+   map.AddWebUIConfig(std::make_unique<CreditsUIConfig>());
++#if BUILDFLAG(IS_WIN)
++  // Yatesium: the import page.
++  map.AddWebUIConfig(std::make_unique<yatesium::ImportUIConfig>());
++#endif
+   map.AddWebUIConfig(std::make_unique<DataSharingInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<DownloadInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<FamilyLinkUserInternalsUIConfig>());
+diff --git a/chrome/browser/yatesium_import.cc b/chrome/browser/yatesium_import.cc
+new file mode 100644
+index 000000000..e40175562
+--- /dev/null
++++ b/chrome/browser/yatesium_import.cc
+@@ -0,0 +1,1102 @@
++// Yatesium: the import page. See yatesium_import.h.
++//
++// How the page works: it is plain HTML built here, with no script. Each
++// browser profile is a form with checkboxes. Submitting it loads "run?..."
++// on this page, with a token that is valid once. The list of what was found
++// is kept from the last time the page was shown, and the form refers to
++// entries of that list.
++
++#include "chrome/browser/yatesium_import.h"
++
++#include <map>
++#include <memory>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++#include "base/base_paths.h"
++#include "base/base_paths_win.h"
++#include "base/files/file_enumerator.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/memory/ref_counted_memory.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
++#include "base/path_service.h"
++#include "base/strings/escape.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/task/task_traits.h"
++#include "base/task/thread_pool.h"
++#include "base/unguessable_token.h"
++#include "base/values.h"
++#include "base/version.h"
++#include "base/win/shortcut.h"
++#include "chrome/browser/bookmarks/bookmark_model_factory.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/web_applications/proto/web_app.pb.h"
++#include "chrome/browser/web_applications/web_app_command_scheduler.h"
++#include "chrome/browser/web_applications/web_app_helpers.h"
++#include "chrome/browser/web_applications/web_app_install_info.h"
++#include "chrome/browser/web_applications/web_app_install_params.h"
++#include "chrome/browser/web_applications/web_app_provider.h"
++#include "chrome/browser/web_applications/web_app_registrar.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++#include "components/bookmarks/browser/bookmark_node.h"
++#include "components/sync/protocol/web_app_specifics.pb.h"
++#include "components/webapps/browser/install_result_code.h"
++#include "components/webapps/browser/installable/installable_metrics.h"
++#include "components/webapps/common/web_app_id.h"
++#include "content/public/browser/url_data_source.h"
++#include "content/public/browser/web_ui.h"
++#include "content/public/common/url_constants.h"
++#include "extensions/browser/crx_installer.h"
++#include "extensions/browser/extension_registry.h"
++#include "net/base/url_util.h"
++#include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
++#include "third_party/leveldatabase/env_chromium.h"
++#include "third_party/leveldatabase/src/include/leveldb/db.h"
++#include "third_party/leveldatabase/src/include/leveldb/iterator.h"
++#include "third_party/leveldatabase/src/include/leveldb/options.h"
++#include "third_party/leveldatabase/src/include/leveldb/slice.h"
++#include "third_party/leveldatabase/src/include/leveldb/status.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "ui/gfx/codec/png_codec.h"
++#include "url/gurl.h"
++#include "url/origin.h"
++
++namespace yatesium {
++
++namespace {
++
++// ---------------------------------------------------------------------------
++// What can be imported.
++
++struct BrowserDef {
++  // Name shown on the page.
++  const char* label;
++  // Data folder, relative to the local application data folder.
++  const base::FilePath::CharType* user_data;
++  // Lower-case part of the path of the browser's program files. A shortcut is
++  // taken to belong to this browser if its target contains this text.
++  const char* program_path_part;
++};
++
++constexpr BrowserDef kBrowsers[] = {
++    {"Brave", FILE_PATH_LITERAL("BraveSoftware\\Brave-Browser\\User Data"),
++     "\\bravesoftware\\"},
++    {"Google Chrome", FILE_PATH_LITERAL("Google\\Chrome\\User Data"),
++     "\\google\\chrome\\"},
++    {"Microsoft Edge", FILE_PATH_LITERAL("Microsoft\\Edge\\User Data"),
++     "\\microsoft\\edge\\"},
++    {"Vivaldi", FILE_PATH_LITERAL("Vivaldi\\User Data"), "\\vivaldi\\"},
++    {"Chromium", FILE_PATH_LITERAL("Chromium\\User Data"), "\\chromium\\"},
++};
++
++struct AppEntry {
++  std::string app_id;
++  std::string name;
++  GURL start_url;
++  GURL scope;
++  // The "id" of the web app manifest relative to the start URL, if the other
++  // browser stored one.
++  std::optional<std::string> manifest_id_path;
++  // False if the user had set the app to open in a tab.
++  bool opens_in_window = true;
++};
++
++struct ExtensionEntry {
++  std::string id;
++  std::string name;
++  std::string version;
++  // Folder of the installed version in the other browser's profile.
++  base::FilePath dir;
++  // The "key" of its manifest, which fixes the extension's id.
++  std::string key;
++  bool from_web_store = false;
++};
++
++struct SourceProfile {
++  std::string browser;
++  std::string program_path_part;
++  std::string profile_name;
++  base::FilePath profile_dir;
++  int bookmark_count = 0;
++  std::vector<AppEntry> apps;
++  std::vector<ExtensionEntry> extensions;
++};
++
++// The result of the last scan and the token of the links on the page that
++// showed it. Used on the UI thread only.
++struct ScanState {
++  std::vector<SourceProfile> profiles;
++  std::string token;
++};
++
++ScanState& GetScanState() {
++  static base::NoDestructor<ScanState> state;
++  return *state;
++}
++
++constexpr size_t kMaxJsonSize = 64 * 1024 * 1024;
++constexpr size_t kMaxIconSize = 8 * 1024 * 1024;
++constexpr int kMaxBookmarkDepth = 100;
++
++// ---------------------------------------------------------------------------
++// Scanning. Everything in this section does file access and runs on the
++// thread pool.
++
++std::optional<base::DictValue> ReadJsonFile(const base::FilePath& path) {
++  std::string contents;
++  if (!base::ReadFileToStringWithMaxSize(path, &contents, kMaxJsonSize)) {
++    return std::nullopt;
++  }
++  return base::JSONReader::ReadDict(contents,
++                                    base::JSON_PARSE_CHROMIUM_EXTENSIONS);
++}
++
++int CountBookmarks(const base::DictValue& node, int depth) {
++  if (depth > kMaxBookmarkDepth) {
++    return 0;
++  }
++  const base::ListValue* children = node.FindList("children");
++  if (!children) {
++    return 0;
++  }
++  int count = 0;
++  for (const base::Value& child : *children) {
++    const base::DictValue* dict = child.GetIfDict();
++    if (!dict) {
++      continue;
++    }
++    const std::string* type = dict->FindString("type");
++    if (type && *type == "url") {
++      ++count;
++    } else {
++      count += CountBookmarks(*dict, depth + 1);
++    }
++  }
++  return count;
++}
++
++// Returns the "roots" of the other browser's bookmark file.
++std::optional<base::DictValue> ReadBookmarkRoots(
++    const base::FilePath& profile_dir) {
++  std::optional<base::DictValue> file =
++      ReadJsonFile(profile_dir.AppendASCII("Bookmarks"));
++  if (!file) {
++    return std::nullopt;
++  }
++  base::DictValue* roots = file->FindDict("roots");
++  if (!roots) {
++    return std::nullopt;
++  }
++  return std::move(*roots);
++}
++
++int CountBookmarksInProfile(const base::FilePath& profile_dir) {
++  std::optional<base::DictValue> roots = ReadBookmarkRoots(profile_dir);
++  if (!roots) {
++    return 0;
++  }
++  int count = 0;
++  for (const char* root : {"bookmark_bar", "other", "synced"}) {
++    if (const base::DictValue* node = roots->FindDict(root)) {
++      count += CountBookmarks(*node, 0);
++    }
++  }
++  return count;
++}
++
++// Reads the installed web apps of a profile. They are stored in a LevelDB
++// database that the other browser may have open, so a copy is read.
++std::vector<AppEntry> ReadApps(const base::FilePath& profile_dir) {
++  std::vector<AppEntry> apps;
++  const base::FilePath source =
++      profile_dir.AppendASCII("Sync Data").AppendASCII("LevelDB");
++  if (!base::DirectoryExists(source)) {
++    return apps;
++  }
++  base::ScopedTempDir temp_dir;
++  if (!temp_dir.CreateUniqueTempDir()) {
++    return apps;
++  }
++  const base::FilePath copy = temp_dir.GetPath().AppendASCII("db");
++  if (!base::CopyDirectory(source, copy, /*recursive=*/true)) {
++    return apps;
++  }
++  base::DeleteFile(copy.AppendASCII("LOCK"));
++
++  leveldb_env::Options options;
++  options.create_if_missing = false;
++  options.paranoid_checks = false;
++  std::unique_ptr<leveldb::DB> db;
++  if (!leveldb_env::OpenDB(options, copy.AsUTF8Unsafe(), &db).ok() || !db) {
++    return apps;
++  }
++
++  const std::string prefix = "web_apps-dt-";
++  {
++    leveldb::ReadOptions read_options;
++    read_options.fill_cache = false;
++    std::unique_ptr<leveldb::Iterator> it(db->NewIterator(read_options));
++    for (it->Seek(prefix); it->Valid() && it->key().starts_with(prefix);
++         it->Next()) {
++      web_app::proto::WebApp proto;
++      // Partial parsing accepts records of other browser versions that lack
++      // a field this version requires.
++      if (!proto.ParsePartialFromArray(
++              it->value().data(), static_cast<int>(it->value().size()))) {
++        continue;
++      }
++      if (proto.is_from_sync_and_pending_installation()) {
++        continue;
++      }
++      AppEntry entry;
++      entry.app_id = it->key().ToString().substr(prefix.size());
++      entry.start_url = GURL(proto.sync_data().start_url());
++      if (entry.app_id.empty() || !entry.start_url.is_valid() ||
++          !entry.start_url.SchemeIsHTTPOrHTTPS()) {
++        continue;
++      }
++      entry.name = proto.name();
++      if (entry.name.empty()) {
++        entry.name = proto.sync_data().name();
++      }
++      if (entry.name.empty()) {
++        entry.name = std::string(entry.start_url.GetHost());
++      }
++      entry.scope = GURL(proto.scope());
++      if (proto.sync_data().has_relative_manifest_id()) {
++        entry.manifest_id_path = proto.sync_data().relative_manifest_id();
++      }
++      entry.opens_in_window = proto.sync_data().user_display_mode_default() !=
++                              sync_pb::WebAppSpecifics::BROWSER;
++      apps.push_back(std::move(entry));
++    }
++  }
++  db.reset();
++  return apps;
++}
++
++bool IsExtensionId(const std::string& text) {
++  if (text.size() != 32) {
++    return false;
++  }
++  for (char c : text) {
++    if (c < 'a' || c > 'p') {
++      return false;
++    }
++  }
++  return true;
++}
++
++// Replaces a "__MSG_name__" placeholder with the text from the extension's
++// default locale.
++std::string ResolveExtensionName(const base::FilePath& dir,
++                                 const base::DictValue& manifest,
++                                 const std::string& name) {
++  const std::string_view kPrefix = "__MSG_";
++  const std::string_view kSuffix = "__";
++  if (name.size() <= kPrefix.size() + kSuffix.size() ||
++      !name.starts_with(kPrefix) || !name.ends_with(kSuffix)) {
++    return name;
++  }
++  const std::string message_name = name.substr(
++      kPrefix.size(), name.size() - kPrefix.size() - kSuffix.size());
++  const std::string* locale = manifest.FindString("default_locale");
++  if (!locale) {
++    return name;
++  }
++  std::optional<base::DictValue> messages =
++      ReadJsonFile(dir.AppendASCII("_locales")
++                       .AppendASCII(*locale)
++                       .AppendASCII("messages.json"));
++  if (!messages) {
++    return name;
++  }
++  for (const auto item : *messages) {
++    if (!base::EqualsCaseInsensitiveASCII(item.first, message_name)) {
++      continue;
++    }
++    const base::DictValue* entry = item.second.GetIfDict();
++    const std::string* message = entry ? entry->FindString("message") : nullptr;
++    if (message && !message->empty()) {
++      return *message;
++    }
++  }
++  return name;
++}
++
++std::vector<ExtensionEntry> ReadExtensions(const base::FilePath& profile_dir) {
++  std::vector<ExtensionEntry> extensions;
++  const base::FilePath root = profile_dir.AppendASCII("Extensions");
++  base::FileEnumerator ids(root, /*recursive=*/false,
++                           base::FileEnumerator::DIRECTORIES);
++  for (base::FilePath id_dir = ids.Next(); !id_dir.empty();
++       id_dir = ids.Next()) {
++    const std::string id = id_dir.BaseName().AsUTF8Unsafe();
++    if (!IsExtensionId(id)) {
++      continue;
++    }
++    // The folder holds one sub-folder per installed version, named like
++    // "1.2.3_0". Take the highest version.
++    base::FilePath best_dir;
++    base::Version best_version;
++    base::FileEnumerator versions(id_dir, /*recursive=*/false,
++                                  base::FileEnumerator::DIRECTORIES);
++    for (base::FilePath version_dir = versions.Next(); !version_dir.empty();
++         version_dir = versions.Next()) {
++      const std::string folder = version_dir.BaseName().AsUTF8Unsafe();
++      base::Version version(folder.substr(0, folder.find('_')));
++      if (!version.IsValid()) {
++        continue;
++      }
++      if (!best_version.IsValid() || version.CompareTo(best_version) > 0) {
++        best_version = version;
++        best_dir = version_dir;
++      }
++    }
++    if (best_dir.empty()) {
++      continue;
++    }
++    std::optional<base::DictValue> manifest =
++        ReadJsonFile(best_dir.AppendASCII("manifest.json"));
++    if (!manifest) {
++      continue;
++    }
++    const std::string* key = manifest->FindString("key");
++    const std::string* name = manifest->FindString("name");
++    const std::string* version = manifest->FindString("version");
++    // Without the key the extension would get a different id here.
++    if (!key || key->empty() || !name || !version) {
++      continue;
++    }
++    ExtensionEntry entry;
++    entry.id = id;
++    entry.name = ResolveExtensionName(best_dir, *manifest, *name);
++    entry.version = *version;
++    entry.dir = best_dir;
++    entry.key = *key;
++    const std::string* update_url = manifest->FindString("update_url");
++    entry.from_web_store =
++        update_url &&
++        update_url->find("clients2.google.com/service/update2/crx") !=
++            std::string::npos;
++    extensions.push_back(std::move(entry));
++  }
++  return extensions;
++}
++
++std::vector<SourceProfile> ScanSources() {
++  std::vector<SourceProfile> profiles;
++  base::FilePath local_app_data;
++  if (!base::PathService::Get(base::DIR_LOCAL_APP_DATA, &local_app_data)) {
++    return profiles;
++  }
++  for (const BrowserDef& browser : kBrowsers) {
++    const base::FilePath user_data = local_app_data.Append(browser.user_data);
++    base::FileEnumerator dirs(user_data, /*recursive=*/false,
++                              base::FileEnumerator::DIRECTORIES);
++    for (base::FilePath dir = dirs.Next(); !dir.empty(); dir = dirs.Next()) {
++      const std::string name = dir.BaseName().AsUTF8Unsafe();
++      if (name != "Default" && !name.starts_with("Profile ")) {
++        continue;
++      }
++      if (!base::PathExists(dir.AppendASCII("Preferences"))) {
++        continue;
++      }
++      SourceProfile profile;
++      profile.browser = browser.label;
++      profile.program_path_part = browser.program_path_part;
++      profile.profile_name = name;
++      profile.profile_dir = dir;
++      profile.bookmark_count = CountBookmarksInProfile(dir);
++      profile.apps = ReadApps(dir);
++      profile.extensions = ReadExtensions(dir);
++      if (profile.bookmark_count > 0 || !profile.apps.empty() ||
++          !profile.extensions.empty()) {
++        profiles.push_back(std::move(profile));
++      }
++    }
++  }
++  return profiles;
++}
++
++// ---------------------------------------------------------------------------
++// Bookmarks.
++
++void AddBookmarkChildren(bookmarks::BookmarkModel* model,
++                         const bookmarks::BookmarkNode* parent,
++                         const base::DictValue& node,
++                         int depth) {
++  if (depth > kMaxBookmarkDepth) {
++    return;
++  }
++  const base::ListValue* children = node.FindList("children");
++  if (!children) {
++    return;
++  }
++  for (const base::Value& child : *children) {
++    const base::DictValue* dict = child.GetIfDict();
++    if (!dict) {
++      continue;
++    }
++    const std::string* type = dict->FindString("type");
++    const std::string* name = dict->FindString("name");
++    const std::u16string title = name ? base::UTF8ToUTF16(*name) : u"";
++    if (type && *type == "url") {
++      const std::string* url_text = dict->FindString("url");
++      const GURL url(url_text ? *url_text : std::string());
++      if (url.is_valid()) {
++        model->AddURL(parent, parent->children().size(), title, url);
++      }
++    } else {
++      const bookmarks::BookmarkNode* folder =
++          model->AddFolder(parent, parent->children().size(), title);
++      AddBookmarkChildren(model, folder, *dict, depth + 1);
++    }
++  }
++}
++
++bool HasChildren(const base::DictValue* node) {
++  const base::ListValue* children = node ? node->FindList("children") : nullptr;
++  return children && !children->empty();
++}
++
++// Puts the imported bookmarks into a new folder on the bookmark bar, so they
++// stay apart from the bookmarks that are already there.
++void AddBookmarks(base::WeakPtr<Profile> profile,
++                  const std::string& label,
++                  std::optional<base::DictValue> roots) {
++  if (!profile || !roots) {
++    return;
++  }
++  bookmarks::BookmarkModel* model =
++      BookmarkModelFactory::GetForBrowserContext(profile.get());
++  if (!model || !model->loaded()) {
++    return;
++  }
++  const bookmarks::BookmarkNode* bar = model->bookmark_bar_node();
++  const bookmarks::BookmarkNode* folder =
++      model->AddFolder(bar, bar->children().size(),
++                       base::UTF8ToUTF16("Imported from " + label));
++  if (const base::DictValue* node = roots->FindDict("bookmark_bar")) {
++    AddBookmarkChildren(model, folder, *node, 0);
++  }
++  if (const base::DictValue* node = roots->FindDict("other");
++      HasChildren(node)) {
++    const bookmarks::BookmarkNode* other = model->AddFolder(
++        folder, folder->children().size(), u"Other bookmarks");
++    AddBookmarkChildren(model, other, *node, 0);
++  }
++  if (const base::DictValue* node = roots->FindDict("synced");
++      HasChildren(node)) {
++    const bookmarks::BookmarkNode* mobile = model->AddFolder(
++        folder, folder->children().size(), u"Mobile bookmarks");
++    AddBookmarkChildren(model, mobile, *node, 0);
++  }
++}
++
++void ImportBookmarks(Profile* profile, const SourceProfile& source) {
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++      base::BindOnce(&ReadBookmarkRoots, source.profile_dir),
++      base::BindOnce(&AddBookmarks, profile->GetWeakPtr(),
++                     source.browser + " (" + source.profile_name + ")"));
++}
++
++// ---------------------------------------------------------------------------
++// Extensions.
++
++// Copies the extension's files, because the installer takes its input away.
++// Returns the copy, or an empty path.
++base::FilePath CopyExtension(const base::FilePath& dir) {
++  base::FilePath temp_dir;
++  if (!base::CreateNewTempDirectory(FILE_PATH_LITERAL("yatesium_import"),
++                                    &temp_dir)) {
++    return base::FilePath();
++  }
++  const base::FilePath copy = temp_dir.AppendASCII("extension");
++  if (!base::CopyDirectory(dir, copy, /*recursive=*/true)) {
++    base::DeletePathRecursively(temp_dir);
++    return base::FilePath();
++  }
++  return copy;
++}
++
++// Installs the copied files the way an unpacked package from the store is
++// installed. The extension keeps its id and its update address.
++void InstallCopiedExtension(base::WeakPtr<Profile> profile,
++                            const ExtensionEntry& entry,
++                            const base::FilePath& copy) {
++  if (copy.empty()) {
++    return;
++  }
++  if (!profile) {
++    base::ThreadPool::PostTask(
++        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
++        base::GetDeletePathRecursivelyCallback(copy.DirName()));
++    return;
++  }
++  scoped_refptr<extensions::CrxInstaller> installer =
++      extensions::CrxInstaller::CreateSilent(profile.get());
++  installer->set_install_source(extensions::mojom::ManifestLocation::kInternal);
++  installer->set_delete_source(true);
++  installer->set_allow_silent_install(true);
++  installer->set_install_immediately(true);
++  if (entry.from_web_store) {
++    installer->set_is_gallery_install(true);
++  } else {
++    installer->set_off_store_install_allow_reason(
++        extensions::CrxInstaller::OffStoreInstallAllowedFromSettingsPage);
++  }
++  installer->InstallUnpackedCrx(entry.id, entry.key, copy);
++}
++
++void ImportExtension(Profile* profile, const ExtensionEntry& entry) {
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++      base::BindOnce(&CopyExtension, entry.dir),
++      base::BindOnce(&InstallCopiedExtension, profile->GetWeakPtr(), entry));
++}
++
++// ---------------------------------------------------------------------------
++// Web apps.
++
++// A shortcut of the other browser that was moved out of the way.
++struct MovedShortcut {
++  base::FilePath original;
++  base::FilePath backup;
++};
++
++struct PreparedApp {
++  AppEntry entry;
++  // Icons of the app, by size in pixels.
++  std::map<int, SkBitmap> icons;
++  bool had_desktop_shortcut = false;
++  std::vector<MovedShortcut> moved_shortcuts;
++};
++
++std::map<int, SkBitmap> ReadAppIcons(const base::FilePath& profile_dir,
++                                     const std::string& app_id) {
++  std::map<int, SkBitmap> icons;
++  const base::FilePath dir = profile_dir.AppendASCII("Web Applications")
++                                 .AppendASCII("Manifest Resources")
++                                 .AppendASCII(app_id)
++                                 .AppendASCII("Icons");
++  base::FileEnumerator files(dir, /*recursive=*/false,
++                             base::FileEnumerator::FILES,
++                             FILE_PATH_LITERAL("*.png"));
++  for (base::FilePath file = files.Next(); !file.empty(); file = files.Next()) {
++    std::optional<int64_t> size = base::GetFileSize(file);
++    if (!size || *size <= 0 ||
++        static_cast<uint64_t>(*size) > kMaxIconSize) {
++      continue;
++    }
++    std::optional<std::vector<uint8_t>> bytes = base::ReadFileToBytes(file);
++    if (!bytes) {
++      continue;
++    }
++    SkBitmap bitmap = gfx::PNGCodec::Decode(*bytes);
++    if (bitmap.drawsNothing() || bitmap.width() != bitmap.height()) {
++      continue;
++    }
++    icons[bitmap.width()] = bitmap;
++  }
++  return icons;
++}
++
++struct FoundShortcut {
++  base::FilePath path;
++  bool on_desktop = false;
++  // Lower-case target path and the arguments.
++  std::string target;
++  std::string arguments;
++};
++
++void CollectShortcuts(const base::FilePath& dir,
++                      bool on_desktop,
++                      std::vector<FoundShortcut>* shortcuts) {
++  base::FileEnumerator files(dir, /*recursive=*/false,
++                             base::FileEnumerator::FILES,
++                             FILE_PATH_LITERAL("*.lnk"));
++  for (base::FilePath file = files.Next(); !file.empty(); file = files.Next()) {
++    base::FilePath target;
++    std::wstring arguments;
++    if (!base::win::ResolveShortcut(file, &target, &arguments)) {
++      continue;
++    }
++    FoundShortcut shortcut;
++    shortcut.path = file;
++    shortcut.on_desktop = on_desktop;
++    shortcut.target = base::ToLowerASCII(target.AsUTF8Unsafe());
++    shortcut.arguments = base::WideToUTF8(arguments);
++    shortcuts->push_back(std::move(shortcut));
++  }
++}
++
++// Finds the shortcuts on the desktop and in the Start menu.
++std::vector<FoundShortcut> FindShortcuts() {
++  std::vector<FoundShortcut> shortcuts;
++  base::FilePath desktop;
++  if (base::PathService::Get(base::DIR_USER_DESKTOP, &desktop)) {
++    CollectShortcuts(desktop, /*on_desktop=*/true, &shortcuts);
++  }
++  base::FilePath start_menu;
++  if (base::PathService::Get(base::DIR_START_MENU, &start_menu)) {
++    CollectShortcuts(start_menu, /*on_desktop=*/false, &shortcuts);
++    base::FileEnumerator dirs(start_menu, /*recursive=*/false,
++                              base::FileEnumerator::DIRECTORIES);
++    for (base::FilePath dir = dirs.Next(); !dir.empty(); dir = dirs.Next()) {
++      CollectShortcuts(dir, /*on_desktop=*/false, &shortcuts);
++    }
++  }
++  return shortcuts;
++}
++
++// Reads the icons of the apps and moves the other browser's shortcuts for
++// them into a temporary folder, so the new shortcuts can take their names.
++// Runs on a thread that can use the Windows shell.
++std::vector<PreparedApp> PrepareApps(const base::FilePath& profile_dir,
++                                     const std::string& program_path_part,
++                                     const std::vector<AppEntry>& apps) {
++  std::vector<PreparedApp> prepared;
++  const std::vector<FoundShortcut> shortcuts = FindShortcuts();
++  base::FilePath backup_dir;
++  const bool have_backup_dir = base::CreateNewTempDirectory(
++      FILE_PATH_LITERAL("yatesium_import"), &backup_dir);
++  int backup_number = 0;
++  for (const AppEntry& entry : apps) {
++    PreparedApp app;
++    app.entry = entry;
++    app.icons = ReadAppIcons(profile_dir, entry.app_id);
++    const std::string argument = "--app-id=" + entry.app_id;
++    for (const FoundShortcut& shortcut : shortcuts) {
++      if (shortcut.target.find(program_path_part) == std::string::npos ||
++          shortcut.arguments.find(argument) == std::string::npos) {
++        continue;
++      }
++      app.had_desktop_shortcut |= shortcut.on_desktop;
++      if (!have_backup_dir) {
++        continue;
++      }
++      const base::FilePath backup = backup_dir.AppendASCII(
++          base::NumberToString(backup_number++) + ".lnk");
++      if (base::Move(shortcut.path, backup)) {
++        app.moved_shortcuts.push_back({shortcut.path, backup});
++      }
++    }
++    prepared.push_back(std::move(app));
++  }
++  return prepared;
++}
++
++// Deletes the moved shortcuts if the app was installed, and puts them back if
++// it was not.
++void FinishShortcuts(const std::vector<MovedShortcut>& shortcuts,
++                     bool installed) {
++  for (const MovedShortcut& shortcut : shortcuts) {
++    if (installed) {
++      base::DeleteFile(shortcut.backup);
++    } else {
++      base::Move(shortcut.backup, shortcut.original);
++    }
++  }
++}
++
++void FinishShortcutsOnThreadPool(const std::vector<MovedShortcut>& shortcuts,
++                                 bool installed) {
++  if (shortcuts.empty()) {
++    return;
++  }
++  base::ThreadPool::PostTask(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
++      base::BindOnce(&FinishShortcuts, shortcuts, installed));
++}
++
++void OnAppInstalled(const std::vector<MovedShortcut>& shortcuts,
++                    const webapps::AppId& app_id,
++                    webapps::InstallResultCode code) {
++  FinishShortcutsOnThreadPool(shortcuts, webapps::IsSuccess(code));
++}
++
++void InstallPreparedApps(base::WeakPtr<Profile> profile,
++                         std::vector<PreparedApp> apps) {
++  web_app::WebAppProvider* provider =
++      profile ? web_app::WebAppProvider::GetForWebApps(profile.get())
++              : nullptr;
++  for (PreparedApp& app : apps) {
++    const AppEntry& entry = app.entry;
++    std::optional<webapps::ManifestId> manifest_id;
++    if (provider) {
++      manifest_id = entry.manifest_id_path
++                        ? web_app::GenerateManifestIdUnsafe(
++                              *entry.manifest_id_path, entry.start_url)
++                        : std::optional<webapps::ManifestId>(
++                              web_app::GenerateManifestIdFromStartUrlOnly(
++                                  entry.start_url));
++    }
++    if (!manifest_id) {
++      FinishShortcutsOnThreadPool(app.moved_shortcuts, /*installed=*/false);
++      continue;
++    }
++    auto created = web_app::WebAppInstallInfo::Create(GURL(), *manifest_id,
++                                                      entry.start_url);
++    if (!created.has_value()) {
++      FinishShortcutsOnThreadPool(app.moved_shortcuts, /*installed=*/false);
++      continue;
++    }
++    auto info = std::make_unique<web_app::WebAppInstallInfo>(
++        std::move(created.value()));
++    info->title = base::UTF8ToUTF16(entry.name);
++    if (entry.scope.is_valid() &&
++        url::Origin::Create(entry.scope)
++            .IsSameOriginWith(url::Origin::Create(entry.start_url))) {
++      info->scope = entry.scope;
++    }
++    const web_app::mojom::UserDisplayMode user_display_mode =
++        entry.opens_in_window ? web_app::mojom::UserDisplayMode::kStandalone
++                              : web_app::mojom::UserDisplayMode::kBrowser;
++    info->display_mode = blink::mojom::DisplayMode::kStandalone;
++    info->user_display_mode = user_display_mode;
++    for (const auto& icon : app.icons) {
++      info->icon_bitmaps.any[icon.first] = icon.second;
++      info->trusted_icon_bitmaps.any[icon.first] = icon.second;
++    }
++
++    web_app::WebAppInstallParams params;
++    params.user_display_mode = user_display_mode;
++    params.add_to_desktop = app.had_desktop_shortcut;
++    params.add_to_quick_launch_bar = false;
++
++    provider->scheduler().InstallFromInfoWithParams(
++        std::move(info), /*overwrite_existing_manifest_fields=*/false,
++        webapps::WebappInstallSource::MENU_BROWSER_TAB,
++        base::BindOnce(&OnAppInstalled, app.moved_shortcuts), params);
++  }
++}
++
++void ImportApps(Profile* profile,
++                const SourceProfile& source,
++                const std::vector<AppEntry>& apps) {
++  if (apps.empty()) {
++    return;
++  }
++  // Reading shortcuts needs a thread that is set up for the Windows shell.
++  base::ThreadPool::CreateCOMSTATaskRunner(
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})
++      ->PostTaskAndReplyWithResult(
++          FROM_HERE,
++          base::BindOnce(&PrepareApps, source.profile_dir,
++                         source.program_path_part, apps),
++          base::BindOnce(&InstallPreparedApps, profile->GetWeakPtr()));
++}
++
++// ---------------------------------------------------------------------------
++// The page.
++
++bool IsAppInstalledHere(Profile* profile, const std::string& app_id) {
++  web_app::WebAppProvider* provider =
++      web_app::WebAppProvider::GetForWebApps(profile);
++  return provider && provider->is_registry_ready() &&
++         provider->registrar_unsafe().GetAppById(app_id) != nullptr;
++}
++
++bool IsExtensionInstalledHere(Profile* profile, const std::string& id) {
++  return extensions::ExtensionRegistry::Get(profile)->GetInstalledExtension(
++             id) != nullptr;
++}
++
++std::string Escape(std::string_view text) {
++  return base::EscapeForHTML(text);
++}
++
++std::string PageStart() {
++  return "<!doctype html><html><head><meta charset=\"utf-8\">"
++         "<title>Import from another browser</title></head><body>"
++         "<h1>Import from another browser</h1>";
++}
++
++std::string PageEnd() {
++  return "</body></html>";
++}
++
++// `label` is HTML and must already be escaped.
++std::string Checkbox(const std::string& name,
++                     const std::string& value,
++                     bool checked,
++                     const std::string& label) {
++  return "<label><input type=\"checkbox\" name=\"" + Escape(name) +
++         "\" value=\"" + Escape(value) + "\"" + (checked ? " checked" : "") +
++         "> " + label + "</label>";
++}
++
++// The page is one form per browser profile. Each bookmark set, web app and
++// extension has a checkbox; "Import selected" sends the form to "run".
++std::string BuildListPage(Profile* profile) {
++  ScanState& state = GetScanState();
++  std::string html = PageStart();
++  html +=
++      "<p>This page lists what was found in other Chromium-based browsers of "
++      "your Windows account. Tick what you want and click \"Import "
++      "selected\". Nothing is imported before that.</p>"
++      "<ul>"
++      "<li>Bookmarks are added to a new folder on the bookmark bar.</li>"
++      "<li>Web apps are installed here, and the other browser's Start menu "
++      "and desktop shortcuts for them are replaced by new ones. Sign-ins and "
++      "stored data of the apps stay in the other browser.</li>"
++      "<li>Extensions are copied with the permissions they had. Their "
++      "settings are not copied. They are not ticked to begin with: choose "
++      "the ones you want.</li>"
++      "</ul>";
++  if (state.profiles.empty()) {
++    html += "<p><b>Nothing to import was found.</b></p>";
++  }
++  for (size_t index = 0; index < state.profiles.size(); ++index) {
++    const SourceProfile& source = state.profiles[index];
++    std::string items;
++
++    if (source.bookmark_count > 0) {
++      items += "<h3>Bookmarks</h3><p>" +
++               Checkbox("b", "1", /*checked=*/true,
++                        base::NumberToString(source.bookmark_count) +
++                            " bookmarks") +
++               "</p>";
++    }
++
++    std::string app_items;
++    for (const AppEntry& app : source.apps) {
++      if (IsAppInstalledHere(profile, app.app_id)) {
++        continue;
++      }
++      app_items += "<li>" +
++                   Checkbox("a", app.app_id, /*checked=*/true,
++                            Escape(app.name) + " (" +
++                                Escape(app.start_url.GetHost()) + ")") +
++                   "</li>";
++    }
++    if (!app_items.empty()) {
++      items += "<h3>Web apps</h3><ul>" + app_items + "</ul>";
++    }
++
++    std::string extension_items;
++    for (const ExtensionEntry& extension : source.extensions) {
++      if (IsExtensionInstalledHere(profile, extension.id)) {
++        continue;
++      }
++      extension_items +=
++          "<li>" +
++          Checkbox("e", extension.id, /*checked=*/false,
++                   Escape(extension.name) + " " + Escape(extension.version)) +
++          "</li>";
++    }
++    if (!extension_items.empty()) {
++      items += "<h3>Extensions</h3><ul>" + extension_items + "</ul>";
++    }
++
++    html += "<hr><h2>" + Escape(source.browser) + " (" +
++            Escape(source.profile_name) + ")</h2>";
++    if (items.empty()) {
++      html += "<p>Everything from this profile is already here.</p>";
++      continue;
++    }
++    html += "<form action=\"run\" method=\"get\">"
++            "<input type=\"hidden\" name=\"t\" value=\"" +
++            Escape(state.token) +
++            "\"><input type=\"hidden\" name=\"p\" value=\"" +
++            base::NumberToString(index) + "\">" + items +
++            "<p><button type=\"submit\">Import selected</button></p></form>";
++  }
++  html += PageEnd();
++  return html;
++}
++
++std::string BuildMessagePage(const std::string& message) {
++  return PageStart() + "<p>" + Escape(message) +
++         "</p><p><a href=\"./\">Back to the list</a></p>" + PageEnd();
++}
++
++bool Contains(const std::vector<std::string>& list, const std::string& item) {
++  for (const std::string& entry : list) {
++    if (entry == item) {
++      return true;
++    }
++  }
++  return false;
++}
++
++// Carries out the import that the submitted form asked for and returns the
++// page to show.
++std::string RunImport(Profile* profile, const GURL& url) {
++  std::string token;
++  int profile_index = -1;
++  bool bookmarks_ticked = false;
++  std::vector<std::string> app_ids;
++  std::vector<std::string> extension_ids;
++  for (net::QueryIterator it(url); !it.IsAtEnd(); it.Advance()) {
++    const std::string_view key = it.GetKey();
++    const std::string value = it.GetUnescapedValue();
++    if (key == "t") {
++      token = value;
++    } else if (key == "b") {
++      bookmarks_ticked = true;
++    } else if (key == "a") {
++      app_ids.push_back(value);
++    } else if (key == "e") {
++      extension_ids.push_back(value);
++    } else if (key == "p") {
++      if (!base::StringToInt(value, &profile_index)) {
++        profile_index = -1;
++      }
++    }
++  }
++
++  ScanState& state = GetScanState();
++  if (state.token.empty() || token != state.token || profile_index < 0 ||
++      static_cast<size_t>(profile_index) >= state.profiles.size()) {
++    return BuildMessagePage(
++        "This page is no longer valid. Nothing was imported.");
++  }
++  // One use per token, so that reloading this page imports nothing twice.
++  state.token.clear();
++  const SourceProfile& source = state.profiles[profile_index];
++
++  const bool bookmarks = bookmarks_ticked && source.bookmark_count > 0;
++  std::vector<AppEntry> apps;
++  std::vector<ExtensionEntry> extensions;
++  for (const AppEntry& app : source.apps) {
++    if (Contains(app_ids, app.app_id) &&
++        !IsAppInstalledHere(profile, app.app_id)) {
++      apps.push_back(app);
++    }
++  }
++  for (const ExtensionEntry& extension : source.extensions) {
++    if (Contains(extension_ids, extension.id) &&
++        !IsExtensionInstalledHere(profile, extension.id)) {
++      extensions.push_back(extension);
++    }
++  }
++
++  if (!bookmarks && apps.empty() && extensions.empty()) {
++    return BuildMessagePage("Nothing was selected. Nothing was imported.");
++  }
++
++  if (bookmarks) {
++    ImportBookmarks(profile, source);
++  }
++  ImportApps(profile, source, apps);
++  for (const ExtensionEntry& extension : extensions) {
++    ImportExtension(profile, extension);
++  }
++
++  std::string message = "Importing from " + source.browser + " (" +
++                        source.profile_name + "): ";
++  message += bookmarks ? base::NumberToString(source.bookmark_count) : "0";
++  message += " bookmarks, " + base::NumberToString(apps.size()) +
++             " web apps, " + base::NumberToString(extensions.size()) +
++             " extensions. This takes a moment. Web apps and extensions "
++             "appear on their own pages when they are installed.";
++  return BuildMessagePage(message);
++}
++
++void Respond(content::URLDataSource::GotDataCallback callback,
++             const std::string& html) {
++  std::move(callback).Run(base::MakeRefCounted<base::RefCountedString>(html));
++}
++
++void OnScanDone(base::WeakPtr<Profile> profile,
++                content::URLDataSource::GotDataCallback callback,
++                std::vector<SourceProfile> profiles) {
++  if (!profile) {
++    Respond(std::move(callback), std::string());
++    return;
++  }
++  ScanState& state = GetScanState();
++  state.profiles = std::move(profiles);
++  state.token = base::UnguessableToken::Create().ToString();
++  Respond(std::move(callback), BuildListPage(profile.get()));
++}
++
++class ImportSource : public content::URLDataSource {
++ public:
++  explicit ImportSource(Profile* profile) : profile_(profile->GetWeakPtr()) {}
++  ImportSource(const ImportSource&) = delete;
++  ImportSource& operator=(const ImportSource&) = delete;
++  ~ImportSource() override = default;
++
++  // content::URLDataSource:
++  std::string GetSource() override { return kImportHost; }
++
++  void StartDataRequest(
++      const GURL& url,
++      const content::WebContents::Getter& wc_getter,
++      content::URLDataSource::GotDataCallback callback) override {
++    if (!profile_) {
++      Respond(std::move(callback), std::string());
++      return;
++    }
++    if (url.path() == "/run") {
++      Respond(std::move(callback), RunImport(profile_.get(), url));
++      return;
++    }
++    base::ThreadPool::PostTaskAndReplyWithResult(
++        FROM_HERE,
++        {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++         base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++        base::BindOnce(&ScanSources),
++        base::BindOnce(&OnScanDone, profile_, std::move(callback)));
++  }
++
++  std::string GetMimeType(const GURL& url) override { return "text/html"; }
++
++  bool AllowCaching() override { return false; }
++
++ private:
++  base::WeakPtr<Profile> profile_;
++};
++
++}  // namespace
++
++bool OtherBrowserDataExists() {
++  base::FilePath local_app_data;
++  if (!base::PathService::Get(base::DIR_LOCAL_APP_DATA, &local_app_data)) {
++    return false;
++  }
++  for (const BrowserDef& browser : kBrowsers) {
++    if (base::DirectoryExists(local_app_data.Append(browser.user_data))) {
++      return true;
++    }
++  }
++  return false;
++}
++
++ImportUI::ImportUI(content::WebUI* web_ui) : WebUIController(web_ui) {
++  // Not offered in incognito and guest windows: the import changes the
++  // regular profile.
++  Profile* profile = Profile::FromWebUI(web_ui)->GetOriginalProfile();
++  content::URLDataSource::Add(Profile::FromWebUI(web_ui),
++                              std::make_unique<ImportSource>(profile));
++}
++
++ImportUI::~ImportUI() = default;
++
++ImportUIConfig::ImportUIConfig()
++    : DefaultWebUIConfig(content::kChromeUIScheme, kImportHost) {}
++
++}  // namespace yatesium
+diff --git a/chrome/browser/yatesium_import.h b/chrome/browser/yatesium_import.h
+new file mode 100644
+index 000000000..86ec9ae06
+--- /dev/null
++++ b/chrome/browser/yatesium_import.h
+@@ -0,0 +1,43 @@
++// Yatesium: the import page (yatesium://import, chrome://import).
++//
++// The page lists the bookmarks, web apps and extensions found in other
++// Chromium-based browsers of the same Windows account and imports what the
++// user clicks. Nothing is read from another browser until the page is opened,
++// and nothing is imported without a click.
++
++#ifndef CHROME_BROWSER_YATESIUM_IMPORT_H_
++#define CHROME_BROWSER_YATESIUM_IMPORT_H_
++
++#include "content/public/browser/web_ui_controller.h"
++#include "content/public/browser/webui_config.h"
++
++namespace content {
++class WebUI;
++}  // namespace content
++
++namespace yatesium {
++
++inline constexpr char kImportHost[] = "import";
++inline constexpr char kImportURL[] = "chrome://import/";
++
++// True if the data folder of another Chromium-based browser exists for the
++// current Windows account. Used to decide whether the first run opens the
++// import page. Only checks whether the folders exist.
++bool OtherBrowserDataExists();
++
++class ImportUI : public content::WebUIController {
++ public:
++  explicit ImportUI(content::WebUI* web_ui);
++  ImportUI(const ImportUI&) = delete;
++  ImportUI& operator=(const ImportUI&) = delete;
++  ~ImportUI() override;
++};
++
++class ImportUIConfig : public content::DefaultWebUIConfig<ImportUI> {
++ public:
++  ImportUIConfig();
++};
++
++}  // namespace yatesium
++
++#endif  // CHROME_BROWSER_YATESIUM_IMPORT_H_

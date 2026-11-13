@@ -73,6 +73,30 @@ Limits:
   logged-in sessions do not.
 - It updates itself from this repository's releases. See "Updates" below.
 
+## Importing from another browser
+
+`yatesium://import` lists what it finds in other Chromium-based browsers of
+the same Windows account (Brave, Chrome, Edge, Vivaldi, Chromium) and imports
+what you tick. On the first run the page opens by itself if one of those
+browsers has data on the computer. Open it again at any time to import more.
+
+Each browser profile is shown with checkboxes and an "Import selected"
+button:
+
+- Bookmarks. Added to a new folder "Imported from ..." on the bookmark bar.
+- Web apps (PWAs). Installed in Yatesium with their name, icon, address and
+  window setting. The other browser's Start menu and desktop shortcuts for
+  an imported app are removed and Yatesium creates its own. Taskbar pins are
+  not changed. Sign-ins and stored data of the app stay in the other browser.
+- Extensions. Not ticked to begin with; choose the ones you want. The files
+  are copied from the other browser, so Manifest V2 extensions that the store
+  no longer offers come along. An extension keeps its id and permissions.
+  Its settings are not copied.
+
+Things already present in Yatesium are left out of the list. Nothing is read
+from another browser until the page is opened, and nothing is imported
+without the button. The other browser can stay open during the import.
+
 ## Google sign-in and sync
 
 Google only lets a browser sign in and sync with credentials that belong to
@@ -319,6 +343,7 @@ only the files they touch are recompiled.
 | `patches/0011`, `0012` | No telemetry, no Safe Browsing |
 | `patches/0013` | The updater program, and the browser change that starts it |
 | `patches/0014` | Flags for the user's own Google API credentials |
+| `patches/0015` | The import page for bookmarks, web apps and extensions |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |
