@@ -49,10 +49,8 @@ again replaces the zip of that release.
 To publish the zip of an earlier run without building again, run the
 `publish` workflow and enter that run's number.
 
-Optional: for Google sign-in and sync, create your own Google API keys and add
-them as repository secrets named `GOOGLE_API_KEY`, `GOOGLE_DEFAULT_CLIENT_ID`
-and `GOOGLE_DEFAULT_CLIENT_SECRET`. Without them the browser works but cannot
-sign in to a Google account for sync.
+Google sign-in and sync need your own Google API credentials. They are entered
+in the browser, not built in. See "Google sign-in and sync" below.
 
 ## Using the portable build
 
@@ -74,6 +72,57 @@ Limits:
   history, settings and extensions come along, but saved passwords and
   logged-in sessions do not.
 - It updates itself from this repository's releases. See "Updates" below.
+
+## Google sign-in and sync
+
+Google only lets a browser sign in and sync with credentials that belong to
+that browser's maker. Yatesium ships without any, so sign-in is off until you
+enter your own on the flags page. Nothing needs to be rebuilt.
+
+Get the credentials (once, free):
+
+1. With the Google account you will use, subscribe to the
+   `chromium-dev@chromium.org` group (email delivery can be turned off).
+   Google shows the Chrome APIs only to members of that group.
+2. Join `google-browser-signin-testaccounts@chromium.org` with every Google
+   account that should be able to sign in to Yatesium. Without this, Google
+   refuses to hand out sign-in tokens to a self-made browser.
+3. In the Google Cloud console, create a project.
+4. Under "APIs and Services", "Library", enable the Chrome Sync API. The
+   Chromium instructions list more APIs that other features use.
+5. Under "Credentials", create an "OAuth client ID" of type "Desktop app"
+   (set up the consent screen if asked). Note the client ID and the client
+   secret.
+6. Under "Credentials", create an "API key". Note it.
+
+Google's own instructions, which may be newer than this list:
+https://www.chromium.org/developers/how-tos/api-keys/
+
+Enter them in Yatesium:
+
+1. Open `yatesium://flags` and search for "Google".
+2. Fill in the three text fields:
+   - "Google API key" (`yatesium://flags/#google-api-key`)
+   - "Google OAuth client ID" (`yatesium://flags/#google-oauth-client-id`)
+   - "Google OAuth client secret"
+     (`yatesium://flags/#google-oauth-client-secret`)
+3. Relaunch. The sign-in and sync option in the profile menu now uses your
+   credentials.
+
+To turn it off again, clear the three fields and relaunch.
+
+Things to know:
+
+- The values are stored in `Data\User Data\Local State`, unencrypted, and
+  the client secret is visible on `yatesium://version` in the command line.
+  Anyone who gets the folder gets the credentials.
+- Google's terms say the credentials are for your own use. Do not put them
+  into a build you hand to others. The build can still take them from
+  `GOOGLE_API_KEY`, `GOOGLE_DEFAULT_CLIENT_ID` and
+  `GOOGLE_DEFAULT_CLIENT_SECRET` (environment or repository secrets), but
+  this repository's releases are public, so do not set those here.
+- With a client ID set, signing in to a Google website also tries to sign the
+  browser in.
 
 ## Updates
 
@@ -263,6 +312,7 @@ only the files they touch are recompiled.
 | `patches/0008`-`0010` | No policy, no remote experiments, no outside extension installs |
 | `patches/0011`, `0012` | No telemetry, no Safe Browsing |
 | `patches/0013` | The updater program, and the browser change that starts it |
+| `patches/0014` | Flags for the user's own Google API credentials |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |

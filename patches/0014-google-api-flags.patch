@@ -1,0 +1,123 @@
+diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
+index 0d8a6e98a..52e3893fa 100644
+--- a/chrome/browser/about_flags.cc
++++ b/chrome/browser/about_flags.cc
+@@ -234,6 +234,7 @@
+ #include "device/gamepad/public/cpp/gamepad_features.h"
+ #include "device/vr/buildflags/buildflags.h"
+ #include "extensions/buildflags/buildflags.h"
++#include "google_apis/gaia/gaia_switches.h"
+ #include "gpu/config/gpu_finch_features.h"
+ #include "gpu/config/gpu_switches.h"
+ #include "media/audio/audio_features.h"
+@@ -12477,6 +12478,19 @@ const FeatureEntry kFeatureEntries[] = {
+      FEATURE_VALUE_TYPE(switches::kMigrateAccountManagerDelegate)},
+ #endif
+ 
++    // Yatesium: the user's own Google API credentials, for sign-in and sync.
++    {"google-api-key", flag_descriptions::kYatesiumGoogleApiKeyName,
++     flag_descriptions::kYatesiumGoogleApiKeyDescription, kOsAll,
++     STRING_VALUE_TYPE(switches::kGoogleApiKey, "")},
++    {"google-oauth-client-id",
++     flag_descriptions::kYatesiumGoogleClientIdName,
++     flag_descriptions::kYatesiumGoogleClientIdDescription, kOsAll,
++     STRING_VALUE_TYPE(switches::kOAuth2ClientID, "")},
++    {"google-oauth-client-secret",
++     flag_descriptions::kYatesiumGoogleClientSecretName,
++     flag_descriptions::kYatesiumGoogleClientSecretDescription, kOsAll,
++     STRING_VALUE_TYPE(switches::kOAuth2ClientSecret, "")},
++
+     {"variations-seed-corpus", flag_descriptions::kVariationsSeedCorpusName,
+      flag_descriptions::kVariationsSeedCorpusDescription, kOsAll,
+      STRING_VALUE_TYPE(variations::switches::kVariationsSeedCorpus, "")},
+diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
+index 33fab3506..4d77e73cb 100644
+--- a/chrome/browser/flag_descriptions.h
++++ b/chrome/browser/flag_descriptions.h
+@@ -8770,6 +8770,21 @@ inline constexpr char kEnableManagementPromotionBannerDescription[] =
+     "Enables showing the management promotion banner on chrome://management "
+     "page.";
+ 
++inline constexpr char kYatesiumGoogleApiKeyName[] = "Google API key";
++inline constexpr char kYatesiumGoogleApiKeyDescription[] =
++    "Your own Google API key, used for Google services such as sign-in and "
++    "sync. Set this together with the OAuth client ID and client secret, "
++    "then relaunch.";
++inline constexpr char kYatesiumGoogleClientIdName[] = "Google OAuth client ID";
++inline constexpr char kYatesiumGoogleClientIdDescription[] =
++    "The client ID of your own Google OAuth client (type: Desktop app), used "
++    "for Google sign-in and sync.";
++inline constexpr char kYatesiumGoogleClientSecretName[] =
++    "Google OAuth client secret";
++inline constexpr char kYatesiumGoogleClientSecretDescription[] =
++    "The client secret that belongs to the OAuth client ID. It is stored "
++    "unencrypted in the Data folder.";
++
+ inline constexpr char kVariationsSeedCorpusName[] = "Variations seed corpus";
+ inline constexpr char kVariationsSeedCorpusDescription[] =
+     "The value of the 'corpus' parameter in the variations seed request. "
+diff --git a/google_apis/api_key_cache.cc b/google_apis/api_key_cache.cc
+index d4ec88d82..c76cadc05 100644
+--- a/google_apis/api_key_cache.cc
++++ b/google_apis/api_key_cache.cc
+@@ -140,9 +140,12 @@ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys)
+   GaiaConfig* gaia_config = GaiaConfig::GetInstance();
+ 
+   std::string api_key_from_feature = GetAPIKeyOverrideViaFeature();
++  // Yatesium: the API key and the default OAuth client can be given on the
++  // command line, which is how the entries on the flags page reach this code.
+   api_key_ = CalculateKeyValue(default_api_keys.google_api_key,
+                                STRINGIZE_NO_EXPANSION(GOOGLE_API_KEY),
+-                               api_key_from_feature, nullptr, std::string(),
++                               api_key_from_feature, ::switches::kGoogleApiKey,
++                               std::string(),
+                                environment.get(), command_line, gaia_config,
+                                default_api_keys.allow_override_via_environment,
+                                default_api_keys.allow_unset_values);
+@@ -255,14 +258,16 @@ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys)
+ 
+   std::string default_client_id = CalculateKeyValue(
+       default_api_keys.google_default_client_id,
+-      STRINGIZE_NO_EXPANSION(GOOGLE_DEFAULT_CLIENT_ID), std::string(), nullptr,
+-      std::string(), environment.get(), command_line, gaia_config,
++      STRINGIZE_NO_EXPANSION(GOOGLE_DEFAULT_CLIENT_ID), std::string(),
++      ::switches::kOAuth2ClientID, std::string(), environment.get(),
++      command_line, gaia_config,
+       default_api_keys.allow_override_via_environment,
+       default_api_keys.allow_unset_values);
+   std::string default_client_secret = CalculateKeyValue(
+       default_api_keys.google_default_client_secret,
+       STRINGIZE_NO_EXPANSION(GOOGLE_DEFAULT_CLIENT_SECRET), std::string(),
+-      nullptr, std::string(), environment.get(), command_line, gaia_config,
++      ::switches::kOAuth2ClientSecret, std::string(), environment.get(),
++      command_line, gaia_config,
+       default_api_keys.allow_override_via_environment,
+       default_api_keys.allow_unset_values);
+ 
+diff --git a/google_apis/gaia/gaia_switches.cc b/google_apis/gaia/gaia_switches.cc
+index 1a0cfa0af..1ad22edd9 100644
+--- a/google_apis/gaia/gaia_switches.cc
++++ b/google_apis/gaia/gaia_switches.cc
+@@ -13,6 +13,8 @@ const char kGaiaUrl[]                       = "gaia-url";
+ const char kGoogleApisUrl[]                 = "google-apis-url";
+ const char kLsoUrl[]                        = "lso-url";
+ const char kOAuthAccountManagerUrl[] = "oauth-account-manager-url";
++// Yatesium: the Google API key, set from the flags page.
++const char kGoogleApiKey[] = "google-api-key";
+ const char kOAuth2ClientID[] = "oauth2-client-id";
+ const char kOAuth2ClientSecret[] = "oauth2-client-secret";
+ 
+diff --git a/google_apis/gaia/gaia_switches.h b/google_apis/gaia/gaia_switches.h
+index 7ac4bcd5f..53d0dad86 100644
+--- a/google_apis/gaia/gaia_switches.h
++++ b/google_apis/gaia/gaia_switches.h
+@@ -38,6 +38,9 @@ COMPONENT_EXPORT(GOOGLE_APIS) extern const char kLsoUrl[];
+ // "https://oauthaccountmanager.googleapis.com".
+ COMPONENT_EXPORT(GOOGLE_APIS) extern const char kOAuthAccountManagerUrl[];
+ 
++// Yatesium: specifies the Google API key.
++COMPONENT_EXPORT(GOOGLE_APIS) extern const char kGoogleApiKey[];
++
+ // Specifies custom OAuth2 client id for testing purposes.
+ COMPONENT_EXPORT(GOOGLE_APIS) extern const char kOAuth2ClientID[];
+ 
