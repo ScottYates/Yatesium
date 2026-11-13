@@ -77,10 +77,10 @@ index d79e9dfdb..57d21b5ee 100644
    map.AddWebUIConfig(std::make_unique<FamilyLinkUserInternalsUIConfig>());
 diff --git a/chrome/browser/yatesium_import.cc b/chrome/browser/yatesium_import.cc
 new file mode 100644
-index 000000000..7c8b866a8
+index 000000000..61bcd7c24
 --- /dev/null
 +++ b/chrome/browser/yatesium_import.cc
-@@ -0,0 +1,1658 @@
+@@ -0,0 +1,1956 @@
 +// Yatesium: the import page. See yatesium_import.h.
 +//
 +// How the page works: it is plain HTML built here, with no script. Each
@@ -111,6 +111,7 @@ index 000000000..7c8b866a8
 +#include "base/files/scoped_temp_dir.h"
 +#include "base/functional/bind.h"
 +#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
 +#include "base/memory/ref_counted_memory.h"
 +#include "base/memory/scoped_refptr.h"
 +#include "base/memory/weak_ptr.h"
@@ -131,6 +132,7 @@ index 000000000..7c8b866a8
 +#include "chrome/browser/bookmarks/bookmark_model_factory.h"
 +#include "chrome/browser/lifetime/application_lifetime.h"
 +#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/search_engines/template_url_service_factory.h"
 +#include "chrome/browser/web_applications/proto/web_app.pb.h"
 +#include "chrome/browser/web_applications/web_app_command_scheduler.h"
 +#include "chrome/browser/web_applications/web_app_helpers.h"
@@ -142,6 +144,9 @@ index 000000000..7c8b866a8
 +#include "components/bookmarks/browser/bookmark_node.h"
 +#include "components/pref_registry/pref_registry_syncable.h"
 +#include "components/prefs/pref_service.h"
++#include "components/search_engines/template_url.h"
++#include "components/search_engines/template_url_data.h"
++#include "components/search_engines/template_url_service.h"
 +#include "components/sync/protocol/web_app_specifics.pb.h"
 +#include "components/webapps/browser/install_result_code.h"
 +#include "components/webapps/browser/installable/installable_metrics.h"
@@ -220,6 +225,15 @@ index 000000000..7c8b866a8
 +  bool from_web_store = false;
 +};
 +
++// A search engine the user added.
++struct EngineEntry {
++  std::u16string name;
++  std::u16string keyword;
++  std::string url;
++  std::string suggest_url;
++  std::string favicon_url;
++};
++
 +struct SourceProfile {
 +  std::string browser;
 +  std::string program_path_part;
@@ -228,6 +242,8 @@ index 000000000..7c8b866a8
 +  int bookmark_count = 0;
 +  std::vector<AppEntry> apps;
 +  std::vector<ExtensionEntry> extensions;
++  // True for the contents of a settings file, false for another browser.
++  bool from_settings_file = false;
 +};
 +
 +// The result of the last scan and the token of the links on the page that
@@ -235,6 +251,11 @@ index 000000000..7c8b866a8
 +struct ScanState {
 +  std::vector<SourceProfile> profiles;
 +  std::string token;
++  // The settings file that was opened last, unpacked into `file_temp_dir`.
++  std::optional<SourceProfile> file;
++  base::FilePath file_temp_dir;
++  bool file_has_settings = false;
++  std::vector<EngineEntry> file_engines;
 +};
 +
 +ScanState& GetScanState() {
@@ -245,6 +266,75 @@ index 000000000..7c8b866a8
 +constexpr size_t kMaxJsonSize = 64 * 1024 * 1024;
 +constexpr size_t kMaxIconSize = 8 * 1024 * 1024;
 +constexpr int kMaxBookmarkDepth = 100;
++
++// A settings file is a zip with this file at the top and the profile's files
++// in a "profile" folder, laid out the way Chromium keeps them on disk.
++constexpr char kSettingsMarkerFile[] = "yatesium-settings.json";
++// The search engines the user added, next to the marker file.
++constexpr char kSettingsEnginesFile[] = "search-engines.json";
++constexpr char kSettingsProfileDir[] = "profile";
++// Holds a settings file that replaces the profile's files at the next start.
++constexpr char kRestoreDirName[] = "Yatesium Restore";
++constexpr char kRestoreReadyFile[] = "ready";
++
++// The parts of a profile that a settings file carries. Paths are relative to
++// the profile folder, with "/" between folders.
++constexpr const char* kSettingsFiles[] = {
++    "Preferences",
++    "Secure Preferences",
++    "Bookmarks",
++};
++constexpr const char* kSettingsDirs[] = {
++    "Extensions",
++    "Local Extension Settings",
++    "Sync Extension Settings",
++    "Extension State",
++    "Extension Rules",
++    "Extension Scripts",
++    "Sync Data/LevelDB",
++    "Web Applications",
++};
++// Databases of extensions are folders in here whose names start like this.
++constexpr char kIndexedDBDir[] = "IndexedDB";
++constexpr char kExtensionDatabasePrefix[] = "chrome-extension_";
++
++base::FilePath AppendRelative(const base::FilePath& root,
++                              std::string_view relative) {
++  base::FilePath path = root;
++  size_t start = 0;
++  while (start <= relative.size()) {
++    size_t end = relative.find('/', start);
++    if (end == std::string_view::npos) {
++      end = relative.size();
++    }
++    path = path.AppendASCII(relative.substr(start, end - start));
++    start = end + 1;
++  }
++  return path;
++}
++
++// Copies a folder with everything in it and carries on past files that cannot
++// be copied. Lock files of databases are left out. Returns false if anything
++// was skipped because of an error.
++bool CopyTree(const base::FilePath& from, const base::FilePath& to) {
++  if (!base::CreateDirectory(to)) {
++    return false;
++  }
++  bool ok = true;
++  base::FileEnumerator entries(
++      from, /*recursive=*/false,
++      base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES);
++  for (base::FilePath entry = entries.Next(); !entry.empty();
++       entry = entries.Next()) {
++    const base::FilePath target = to.Append(entry.BaseName());
++    if (entries.GetInfo().IsDirectory()) {
++      ok = CopyTree(entry, target) && ok;
++    } else if (entry.BaseName().AsUTF8Unsafe() != "LOCK") {
++      ok = base::CopyFile(entry, target) && ok;
++    }
++  }
++  return ok;
++}
 +
 +// ---------------------------------------------------------------------------
 +// Scanning. Everything in this section does file access and runs on the
@@ -326,10 +416,9 @@ index 000000000..7c8b866a8
 +    return apps;
 +  }
 +  const base::FilePath copy = temp_dir.GetPath().AppendASCII("db");
-+  if (!base::CopyDirectory(source, copy, /*recursive=*/true)) {
-+    return apps;
-+  }
-+  base::DeleteFile(copy.AppendASCII("LOCK"));
++  // A file that the other browser is writing may fail to copy. The database
++  // is opened with what was copied.
++  CopyTree(source, copy);
 +
 +  leveldb_env::Options options;
 +  options.create_if_missing = false;
@@ -660,12 +749,52 @@ index 000000000..7c8b866a8
 +  installer->InstallUnpackedCrx(entry.id, entry.key, copy);
 +}
 +
-+void ImportExtension(Profile* profile, const ExtensionEntry& entry) {
++// Copies the data an extension stored in the profile `from_profile` into the
++// profile `to_profile`, unless the extension already has data there. This is
++// done before the extension is installed, while nothing has its data open.
++void CopyExtensionData(const base::FilePath& from_profile,
++                       const base::FilePath& to_profile,
++                       const std::string& id) {
++  for (const char* dir :
++       {"Local Extension Settings", "Sync Extension Settings"}) {
++    const base::FilePath from = from_profile.AppendASCII(dir).AppendASCII(id);
++    const base::FilePath to = to_profile.AppendASCII(dir).AppendASCII(id);
++    if (base::DirectoryExists(from) && !base::PathExists(to)) {
++      CopyTree(from, to);
++    }
++  }
++  for (const char* suffix : {"_0.indexeddb.leveldb", "_0.indexeddb.blob"}) {
++    const std::string name = kExtensionDatabasePrefix + id + suffix;
++    const base::FilePath from =
++        from_profile.AppendASCII(kIndexedDBDir).AppendASCII(name);
++    const base::FilePath to =
++        to_profile.AppendASCII(kIndexedDBDir).AppendASCII(name);
++    if (base::DirectoryExists(from) && !base::PathExists(to)) {
++      CopyTree(from, to);
++    }
++  }
++}
++
++base::FilePath CopyExtensionAndData(const ExtensionEntry& entry,
++                                    const base::FilePath& data_from,
++                                    const base::FilePath& profile_dir) {
++  if (!data_from.empty()) {
++    CopyExtensionData(data_from, profile_dir, entry.id);
++  }
++  return CopyExtension(entry.dir);
++}
++
++// `data_from` is the profile folder to take the extension's stored data from.
++// It is empty if the data is not imported.
++void ImportExtension(Profile* profile,
++                     const ExtensionEntry& entry,
++                     const base::FilePath& data_from) {
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE,
 +      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
 +       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-+      base::BindOnce(&CopyExtension, entry.dir),
++      base::BindOnce(&CopyExtensionAndData, entry, data_from,
++                     profile->GetPath()),
 +      base::BindOnce(&InstallCopiedExtension, profile->GetWeakPtr(), entry));
 +}
 +
@@ -768,9 +897,14 @@ index 000000000..7c8b866a8
 +// Runs on a thread that can use the Windows shell.
 +std::vector<PreparedApp> PrepareApps(const base::FilePath& profile_dir,
 +                                     const std::string& program_path_part,
++                                     bool replace_shortcuts,
 +                                     const std::vector<AppEntry>& apps) {
 +  std::vector<PreparedApp> prepared;
-+  const std::vector<FoundShortcut> shortcuts = FindShortcuts();
++  // A settings file has no shortcuts of another browser to replace.
++  std::vector<FoundShortcut> shortcuts;
++  if (replace_shortcuts) {
++    shortcuts = FindShortcuts();
++  }
 +  base::FilePath backup_dir;
 +  const bool have_backup_dir = base::CreateNewTempDirectory(
 +      FILE_PATH_LITERAL("yatesium_import"), &backup_dir);
@@ -900,7 +1034,8 @@ index 000000000..7c8b866a8
 +      ->PostTaskAndReplyWithResult(
 +          FROM_HERE,
 +          base::BindOnce(&PrepareApps, source.profile_dir,
-+                         source.program_path_part, apps),
++                         source.program_path_part,
++                         !source.from_settings_file, apps),
 +          base::BindOnce(&InstallPreparedApps, profile->GetWeakPtr()));
 +}
 +
@@ -910,7 +1045,8 @@ index 000000000..7c8b866a8
 +// Writes the profile's bookmarks, settings, web apps and extensions with
 +// their data into the zip `dest_file`.
 +bool ExportSettings(const base::FilePath& profile_dir,
-+                    const base::FilePath& dest_file) {
++                    const base::FilePath& dest_file,
++                    const std::string& engines_json) {
 +  base::ScopedTempDir staging;
 +  if (!staging.CreateUniqueTempDir()) {
 +    return false;
@@ -949,6 +1085,9 @@ index 000000000..7c8b866a8
 +                       "{\"product\":\"Yatesium\",\"format\":1}\n")) {
 +    return false;
 +  }
++  if (!engines_json.empty()) {
++    base::WriteFile(root.AppendASCII(kSettingsEnginesFile), engines_json);
++  }
 +  base::DeleteFile(dest_file);
 +  return zip::Zip(root, dest_file, /*include_hidden_files=*/true);
 +}
@@ -958,7 +1097,41 @@ index 000000000..7c8b866a8
 +  base::FilePath temp_dir;
 +  SourceProfile source;
 +  bool has_settings = false;
++  std::vector<EngineEntry> engines;
 +};
++
++std::vector<EngineEntry> ReadEngines(const base::FilePath& file) {
++  std::vector<EngineEntry> engines;
++  std::optional<base::DictValue> dict = ReadJsonFile(file);
++  const base::ListValue* list = dict ? dict->FindList("engines") : nullptr;
++  if (!list) {
++    return engines;
++  }
++  for (const base::Value& item : *list) {
++    const base::DictValue* engine = item.GetIfDict();
++    if (!engine) {
++      continue;
++    }
++    const std::string* name = engine->FindString("name");
++    const std::string* keyword = engine->FindString("keyword");
++    const std::string* url = engine->FindString("url");
++    if (!name || !keyword || keyword->empty() || !url || url->empty()) {
++      continue;
++    }
++    EngineEntry entry;
++    entry.name = base::UTF8ToUTF16(*name);
++    entry.keyword = base::UTF8ToUTF16(*keyword);
++    entry.url = *url;
++    if (const std::string* suggest_url = engine->FindString("suggest_url")) {
++      entry.suggest_url = *suggest_url;
++    }
++    if (const std::string* favicon_url = engine->FindString("favicon_url")) {
++      entry.favicon_url = *favicon_url;
++    }
++    engines.push_back(std::move(entry));
++  }
++  return engines;
++}
 +
 +// Unpacks a settings file into a temporary folder and lists what it holds.
 +OpenedFile OpenSettingsFile(const base::FilePath& zip_file) {
@@ -985,6 +1158,7 @@ index 000000000..7c8b866a8
 +  opened.source.bookmark_count = CountBookmarksInProfile(profile_dir);
 +  opened.source.apps = ReadApps(profile_dir);
 +  opened.source.extensions = ReadExtensions(profile_dir);
++  opened.engines = ReadEngines(temp_dir.AppendASCII(kSettingsEnginesFile));
 +  return opened;
 +}
 +
@@ -1126,6 +1300,96 @@ index 000000000..7c8b866a8
 +      base::BindOnce(&ApplySettingsFromFile, profile->GetWeakPtr()));
 +}
 +
++// Search engines. These run on the UI thread.
++
++// True for a search engine that the user added or turned on, as opposed to
++// the built-in ones and the ones Chromium noted by itself while browsing.
++bool IsCustomEngine(const TemplateURL& engine) {
++  const TemplateURLData& data = engine.data();
++  return engine.type() == TemplateURL::NORMAL && data.prepopulate_id == 0 &&
++         data.starter_pack_id == 0 && !data.CreatedByPolicy() &&
++         !data.safe_for_autoreplace;
++}
++
++// Starts loading the search engines, so they are there when the user clicks.
++void LoadEngines(Profile* profile) {
++  TemplateURLService* service =
++      TemplateURLServiceFactory::GetForProfile(profile);
++  if (service && !service->loaded()) {
++    service->Load();
++  }
++}
++
++// Returns the user's own search engines as JSON for the settings file, or an
++// empty string if they are not available.
++std::string EnginesToJson(Profile* profile) {
++  TemplateURLService* service =
++      TemplateURLServiceFactory::GetForProfile(profile);
++  if (!service || !service->loaded()) {
++    return std::string();
++  }
++  base::ListValue list;
++  for (TemplateURL* engine : service->GetTemplateURLs()) {
++    if (!engine || !IsCustomEngine(*engine)) {
++      continue;
++    }
++    const TemplateURLData& data = engine->data();
++    base::DictValue item;
++    item.Set("name", base::UTF16ToUTF8(data.short_name()));
++    item.Set("keyword", base::UTF16ToUTF8(data.keyword()));
++    item.Set("url", data.url());
++    item.Set("suggest_url", data.suggestions_url);
++    item.Set("favicon_url", data.favicon_url.possibly_invalid_spec());
++    list.Append(std::move(item));
++  }
++  base::DictValue root;
++  root.Set("engines", std::move(list));
++  std::string json;
++  if (!base::JSONWriter::Write(base::Value(std::move(root)), &json)) {
++    return std::string();
++  }
++  return json;
++}
++
++// Adds the search engines to the profile. An engine whose keyword is already
++// taken is skipped. With `replace`, the user's own engines that are there now
++// are removed first, except the one that is the default.
++void AddEngines(Profile* profile,
++                const std::vector<EngineEntry>& engines,
++                bool replace) {
++  TemplateURLService* service =
++      TemplateURLServiceFactory::GetForProfile(profile);
++  if (!service || !service->loaded()) {
++    return;
++  }
++  if (replace) {
++    const TemplateURL* default_engine = service->GetDefaultSearchProvider();
++    std::vector<const TemplateURL*> old_engines;
++    for (TemplateURL* engine : service->GetTemplateURLs()) {
++      if (engine && engine != default_engine && IsCustomEngine(*engine)) {
++        old_engines.push_back(engine);
++      }
++    }
++    for (const TemplateURL* engine : old_engines) {
++      service->Remove(engine);
++    }
++  }
++  for (const EngineEntry& entry : engines) {
++    if (service->GetTemplateURLForKeyword(entry.keyword)) {
++      continue;
++    }
++    TemplateURLData data;
++    data.SetShortName(entry.name);
++    data.SetKeyword(entry.keyword);
++    data.SetURL(entry.url);
++    data.suggestions_url = entry.suggest_url;
++    data.favicon_url = GURL(entry.favicon_url);
++    data.safe_for_autoreplace = false;
++    data.is_active = TemplateURLData::ActiveStatus::kTrue;
++    service->Add(std::make_unique<TemplateURL>(data));
++  }
++}
++
 +// Shows a file dialog for a settings file and reports the chosen path, or an
 +// empty path if the user cancelled. Deletes itself afterwards.
 +class FilePicker : public ui::SelectFileDialog::Listener {
@@ -1230,7 +1494,8 @@ index 000000000..7c8b866a8
 +std::string BuildSourceForm(Profile* profile,
 +                            const SourceProfile& source,
 +                            const std::string& source_id,
-+                            bool offer_settings) {
++                            bool offer_settings,
++                            size_t engine_count) {
 +  std::string items;
 +
 +  if (offer_settings) {
@@ -1238,6 +1503,15 @@ index 000000000..7c8b866a8
 +             Checkbox("s", "1", /*checked=*/true,
 +                      "Browser settings. Settings in the file replace the "
 +                      "current ones where they differ.") +
++             "</p>";
++  }
++
++  if (engine_count > 0) {
++    items += "<h3>Search engines</h3><p>" +
++             Checkbox("q", "1", /*checked=*/true,
++                      base::NumberToString(engine_count) +
++                          " search engines you added. One whose keyword is "
++                          "already in use here is skipped.") +
 +             "</p>";
 +  }
 +
@@ -1298,8 +1572,8 @@ index 000000000..7c8b866a8
 +  std::string html = PageStart();
 +  html +=
 +      "<h2>Settings file</h2>"
-+      "<p>A settings file holds this browser's bookmarks, web apps, settings "
-+      "and extensions with their data. Use it as a backup or to set up "
++      "<p>A settings file holds this browser's bookmarks, web apps, settings, "
++      "the search engines you added, and extensions with their data. Use it as a backup or to set up "
 +      "another copy of Yatesium. It does not hold history, saved passwords "
 +      "or sign-ins.</p>"
 +      "<p><a href=\"export?t=" +
@@ -1331,7 +1605,7 @@ index 000000000..7c8b866a8
 +            Escape(source.profile_name) + ")</h3>";
 +    const std::string form =
 +        BuildSourceForm(profile, source, base::NumberToString(index),
-+                        /*offer_settings=*/false);
++                        /*offer_settings=*/false, /*engine_count=*/0);
 +    html += form.empty() ? "<p>Everything from this profile is already here.</p>"
 +                         : form;
 +  }
@@ -1352,16 +1626,18 @@ index 000000000..7c8b866a8
 +  html += "<h2>Settings file: " + Escape(source.profile_name) + "</h2>";
 +  html += "<p>It holds " + base::NumberToString(source.bookmark_count) +
 +          " bookmarks, " + base::NumberToString(source.apps.size()) +
-+          " web apps and " + base::NumberToString(source.extensions.size()) +
-+          " extensions" +
++          " web apps, " + base::NumberToString(source.extensions.size()) +
++          " extensions and " +
++          base::NumberToString(state.file_engines.size()) +
++          " search engines you added" +
 +          (state.file_has_settings ? ", and browser settings." : ".") + "</p>";
 +
 +  html +=
 +      "<hr><h3>Replace everything</h3>"
-+      "<p>Makes this browser match the file: bookmarks, settings, web apps, "
-+      "and extensions with their data. What is here now in those areas is "
-+      "overwritten, including bookmarks, web apps and extensions that the "
-+      "file does not have. History, saved passwords and sign-ins are kept. "
++      "<p>Makes this browser match the file: bookmarks, settings, search "
++      "engines you added, web apps, and extensions with their data. What is "
++      "here now in those areas is overwritten, including bookmarks, search "
++      "engines, web apps and extensions that the file does not have. History, saved passwords and sign-ins are kept. "
 +      "The browser closes and starts again.</p>"
 +      "<form action=\"restore\" method=\"get\">"
 +      "<input type=\"hidden\" name=\"t\" value=\"" +
@@ -1374,7 +1650,8 @@ index 000000000..7c8b866a8
 +          "already here are not listed. An extension brings its stored data "
 +          "along if this browser has none for it.</p>";
 +  const std::string form =
-+      BuildSourceForm(profile, source, "file", state.file_has_settings);
++      BuildSourceForm(profile, source, "file", state.file_has_settings,
++                      state.file_engines.size());
 +  html += form.empty() ? "<p>Everything in the file is already here.</p>" : form;
 +  html += "<p><a href=\"./\">Back to the list</a></p>";
 +  html += PageEnd();
@@ -1415,6 +1692,7 @@ index 000000000..7c8b866a8
 +std::string RunImport(Profile* profile, const GURL& url) {
 +  std::string source_id;
 +  bool settings_ticked = false;
++  bool engines_ticked = false;
 +  bool bookmarks_ticked = false;
 +  std::vector<std::string> app_ids;
 +  std::vector<std::string> extension_ids;
@@ -1425,6 +1703,8 @@ index 000000000..7c8b866a8
 +      source_id = value;
 +    } else if (key == "s") {
 +      settings_ticked = true;
++    } else if (key == "q") {
++      engines_ticked = true;
 +    } else if (key == "b") {
 +      bookmarks_ticked = true;
 +    } else if (key == "a") {
@@ -1456,6 +1736,8 @@ index 000000000..7c8b866a8
 +
 +  const bool settings = settings_ticked && source->from_settings_file &&
 +                        state.file_has_settings;
++  const bool engines = engines_ticked && source->from_settings_file &&
++                       !state.file_engines.empty();
 +  const bool bookmarks = bookmarks_ticked && source->bookmark_count > 0;
 +  std::vector<AppEntry> apps;
 +  std::vector<ExtensionEntry> extensions;
@@ -1472,12 +1754,16 @@ index 000000000..7c8b866a8
 +    }
 +  }
 +
-+  if (!settings && !bookmarks && apps.empty() && extensions.empty()) {
++  if (!settings && !engines && !bookmarks && apps.empty() &&
++      extensions.empty()) {
 +    return BuildMessagePage("Nothing was selected. Nothing was imported.");
 +  }
 +
 +  if (settings) {
 +    ImportSettings(profile, source->profile_dir);
++  }
++  if (engines) {
++    AddEngines(profile, state.file_engines, /*replace=*/false);
 +  }
 +  if (bookmarks) {
 +    ImportBookmarks(profile, *source);
@@ -1494,6 +1780,9 @@ index 000000000..7c8b866a8
 +                        source->profile_name + "): ";
 +  if (settings) {
 +    message += "settings, ";
++  }
++  if (engines) {
++    message += "search engines, ";
 +  }
 +  message += bookmarks ? base::NumberToString(source->bookmark_count) : "0";
 +  message += " bookmarks, " + base::NumberToString(apps.size()) +
@@ -1516,6 +1805,7 @@ index 000000000..7c8b866a8
 +    return;
 +  }
 +  GetScanState().profiles = std::move(profiles);
++  LoadEngines(profile.get());
 +  Respond(std::move(callback), BuildListPage(profile.get()));
 +}
 +
@@ -1532,12 +1822,13 @@ index 000000000..7c8b866a8
 +
 +void RunExport(const base::FilePath& profile_dir,
 +               const base::FilePath& path,
++               const std::string& engines_json,
 +               content::URLDataSource::GotDataCallback callback) {
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE,
 +      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
 +       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-+      base::BindOnce(&ExportSettings, profile_dir, path),
++      base::BindOnce(&ExportSettings, profile_dir, path, engines_json),
 +      base::BindOnce(&OnExportDone, path, std::move(callback)));
 +}
 +
@@ -1549,8 +1840,9 @@ index 000000000..7c8b866a8
 +    return;
 +  }
 +  // The settings on disk can be a little behind. Write them out first.
-+  profile->GetPrefs()->CommitPendingWrite(base::BindOnce(
-+      &RunExport, profile->GetPath(), path, std::move(callback)));
++  profile->GetPrefs()->CommitPendingWrite(
++      base::BindOnce(&RunExport, profile->GetPath(), path,
++                     EnginesToJson(profile.get()), std::move(callback)));
 +}
 +
 +// Import from a file: ask which file, unpack it, show what it holds.
@@ -1573,6 +1865,8 @@ index 000000000..7c8b866a8
 +  state.file = std::move(opened.source);
 +  state.file_temp_dir = opened.temp_dir;
 +  state.file_has_settings = opened.has_settings;
++  state.file_engines = std::move(opened.engines);
++  LoadEngines(profile.get());
 +  Respond(std::move(callback), BuildFilePage(profile.get()));
 +}
 +
@@ -1615,8 +1909,12 @@ index 000000000..7c8b866a8
 +    return;
 +  }
 +  const base::FilePath unpacked = state.file->profile_dir;
++  // Search engines are kept in a database that cannot be swapped like the
++  // other files, so they are replaced here, before the relaunch.
++  AddEngines(profile, state.file_engines, /*replace=*/true);
 +  // The unpacked files are moved away, so the file is no longer open here.
 +  state.file.reset();
++  state.file_engines.clear();
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE,
 +      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,

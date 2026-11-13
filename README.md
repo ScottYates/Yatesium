@@ -115,25 +115,29 @@ back.
 
 - bookmarks
 - browser settings
+- the search engines you added
 - installed web apps, with their icons
 - extensions, with the data they stored (their settings, filter lists,
   scripts and databases)
 
-It does not hold history, saved passwords, cookies or sign-ins, custom search
-engines, or the entries of `yatesium://flags`. Data that an extension keeps in
+It does not hold history, saved passwords, cookies or sign-ins, or the
+entries of `yatesium://flags`. Data that an extension keeps in
 the page-style "localStorage" is not included either.
 
 "Import from a settings file" asks for the file, shows what it holds, and
 offers two ways to use it:
 
 - "Replace everything and relaunch". The browser restarts and then matches
-  the file in those four areas. What was there before is overwritten,
-  including bookmarks, web apps and extensions that the file does not have.
+  the file in those areas. What was there before is overwritten, including
+  bookmarks, search engines, web apps and extensions that the file does not
+  have. The search engine that is currently the default is never removed.
   History, saved passwords and sign-ins are kept.
 - "Add to this browser". A list with checkboxes, like the one for other
   browsers. Ticked bookmarks, web apps and extensions are added to what is
   already here. "Settings" applies the file's settings over the current ones;
   only the settings that Chromium would sync between installations are taken.
+  "Search engines" adds the ones from the file; one whose keyword is already
+  in use is skipped.
   An extension brings its stored data along if this browser has none for it.
 
 Notes:
