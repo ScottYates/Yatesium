@@ -112,9 +112,11 @@ jobs:
           }
           exit 0
 
+      # Saved after a finished build too, so the next change can resume from
+      # it and recompile only what changed.
       - name: Save build folder
         id: save
-        if: inputs.finished != 'true' && steps.build.outputs.finished != 'true'
+        if: inputs.finished != 'true'
         shell: pwsh
         run: |
           Set-Location $env:BUILD_DIR
