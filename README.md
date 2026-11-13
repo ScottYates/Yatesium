@@ -77,14 +77,15 @@ Limits:
 
 ## Updates
 
-On start the browser runs `update.ps1` from its own folder, hidden. The
-script does this:
+On start the browser runs `yatesium_update.exe --auto` from its own folder,
+with no window. The updater does this:
 
-1. At most once a day, asks the GitHub API for the latest release of this
-   repository. This is the only request it makes when there is nothing new.
+1. At most once a day, downloads `latest.txt` from the latest release of this
+   repository. The file holds the release's version and the SHA-256 of its
+   zip. This is the only request made when there is nothing new.
 2. If the release is newer than `version.txt`, downloads the zip to
-   `Data\Update` and checks it against the SHA-256 that GitHub publishes for
-   the file. A zip that does not match is discarded.
+   `Data\Update` and checks it against that SHA-256. A zip that does not
+   match is discarded.
 3. Waits until every `yatesium.exe` from this folder has closed, then moves
    the old program files out and the new ones in. If that fails part way,
    the old files are moved back. `Data` is not touched.
@@ -92,9 +93,14 @@ script does this:
 The next start runs the new version. `Data\Update\update.log` records what
 happened.
 
-- To check right away, run `Update Yatesium.cmd`.
+- To check right away, run `yatesium_update.exe`. It reports in a console
+  window.
 - To turn automatic updates off, create an empty file `Data\no-update.txt`.
-  Deleting `update.ps1` also works.
+  Deleting `yatesium_update.exe` also works.
+
+The updater is a small C++ program built with the browser
+(`chrome/yatesium_update` in patch 0013). It uses the Windows API and the zip
+reader from zlib, and nothing else.
 
 The update is trusted because it comes from this repository over HTTPS and
 matches the published hash. The zip is not code-signed.
@@ -144,7 +150,7 @@ Removed or turned off in the source:
 Not changed, because they are features and not reporting:
 
 - Third-party cookies follow the Chromium default and the user's setting.
-- The update check: one request a day to the GitHub API. See "Updates".
+- The update check: one small download a day from this repository's releases. See "Updates".
 - Requests to Google services that a feature needs: search suggestions for
   the chosen search engine, translate, online spellcheck, and the component
   updater.
@@ -256,8 +262,7 @@ only the files they touch are recompiled.
 | `patches/0006`, `0007` | Binary file names and the `yatesium://` address bar |
 | `patches/0008`-`0010` | No policy, no remote experiments, no outside extension installs |
 | `patches/0011`, `0012` | No telemetry, no Safe Browsing |
-| `patches/0013` | Starts the updater script when the browser starts |
-| `portable/` | Updater script and its launcher, copied into the zip |
+| `patches/0013` | The updater program, and the browser change that starts it |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |

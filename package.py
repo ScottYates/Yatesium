@@ -26,6 +26,7 @@ EXCLUDE = re.compile(
 
 # The package is rejected if any of these is missing.
 REQUIRED = ('yatesium.exe', 'yatesium.dll', 'yatesium_elf.dll',
+            'yatesium_update.exe',
             'resources.pak', 'icudtl.dat', 'v8_context_snapshot.bin',
             'locales/en-US.pak')
 
@@ -52,15 +53,15 @@ To start fresh, close the browser and delete "Data".
 Updates: once a day the browser asks GitHub whether a newer release exists.
 A newer release is downloaded to "Data\\Update" and installed after the
 browser is closed. "Data" is kept. To check right away, run
-"Update Yatesium.cmd". To turn automatic updates off, create an empty file
+yatesium_update.exe. To turn automatic updates off, create an empty file
 "Data\\no-update.txt".
 
 Open-source licenses: yatesium://credits
 '''
 
 
-# Files from portable/ that are added to the package as they are.
-PORTABLE = ('update.ps1', 'Update Yatesium.cmd')
+# Yatesium's own build outputs, which Chromium's file list does not know.
+EXTRA = ('yatesium_update.exe',)
 
 
 def read_text(name):
@@ -84,6 +85,9 @@ def list_files(files_cfg, out_dir):
             path = Path(match)
             if path.is_file():
                 selected[path.relative_to(out_dir).as_posix()] = path
+    for name in EXTRA:
+        if (out_dir / name).is_file():
+            selected[name] = out_dir / name
     return selected
 
 
@@ -113,8 +117,6 @@ def main():
                          compresslevel=9) as archive:
         for name in sorted(files):
             archive.write(files[name], 'Yatesium/' + name)
-        for name in PORTABLE:
-            archive.write(ROOT / 'portable' / name, 'Yatesium/' + name)
         archive.writestr('Yatesium/README.txt', README % {'version': version})
         # The updater compares this with the tag of the latest release.
         archive.writestr('Yatesium/version.txt', version + '\n')
@@ -123,7 +125,7 @@ def main():
         print('Warning: packaged files still named after Chrome: ' +
               ', '.join(leftovers))
     print('Packaged %d files into %s (%.0f MB)' %
-          (len(files) + len(PORTABLE) + 2, zip_path, zip_path.stat().st_size / 1e6))
+          (len(files) + 2, zip_path, zip_path.stat().st_size / 1e6))
 
 
 if __name__ == '__main__':

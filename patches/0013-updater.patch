@@ -1,0 +1,1025 @@
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index d933ba4f9..d97d74d60 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -245,6 +245,7 @@ if (!is_android && !is_mac) {
+         "//chrome/elevation_service",
+         "//chrome/notification_helper",
+         "//chrome/windows_services/elevated_tracing_service",
++        "//chrome/yatesium_update",
+         "//components/crash/win:chrome_wer",
+       ]
+ 
+diff --git a/chrome/browser/chrome_browser_main_win.cc b/chrome/browser/chrome_browser_main_win.cc
+index e1f879d33..b57eca3b6 100644
+--- a/chrome/browser/chrome_browser_main_win.cc
++++ b/chrome/browser/chrome_browser_main_win.cc
+@@ -14,6 +14,7 @@
+ 
+ #include <algorithm>
+ #include <optional>
++#include <string>
+ #include <string_view>
+ #include <utility>
+ #include <vector>
+@@ -37,6 +38,7 @@
+ #include "base/no_destructor.h"
+ #include "base/notreached.h"
+ #include "base/path_service.h"
++#include "base/process/launch.h"
+ #include "base/scoped_native_library.h"
+ #include "base/strings/cstring_view.h"
+ #include "base/strings/string_number_conversions.h"
+@@ -780,9 +782,31 @@ void ChromeBrowserMainPartsWin::PostProfileInit(Profile* profile,
+   }
+ }
+ 
++// Yatesium: starts the updater that ships next to the executable. It checks
++// for a newer release, downloads it, and swaps the files in after the browser
++// has closed. Nothing happens if the updater is not there.
++static void StartYatesiumUpdater() {
++  base::FilePath exe_dir;
++  if (!base::PathService::Get(base::DIR_EXE, &exe_dir)) {
++    return;
++  }
++  const base::FilePath updater = exe_dir.Append(L"yatesium_update.exe");
++  if (!base::PathExists(updater)) {
++    return;
++  }
++  const std::wstring command_line = L"\"" + updater.value() + L"\" --auto";
++  base::LaunchOptions options;
++  options.start_hidden = true;
++  base::LaunchProcess(command_line, options);
++}
++
+ void ChromeBrowserMainPartsWin::PostBrowserStart() {
+   ChromeBrowserMainParts::PostBrowserStart();
+ 
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
++      base::BindOnce(&StartYatesiumUpdater));
++
+   // Verify that the delay load helper hooks are in place. This cannot be tested
+   // from unit tests, so rely on this failing here.
+   DCHECK(__pfnDliFailureHook2);
+diff --git a/chrome/yatesium_update/BUILD.gn b/chrome/yatesium_update/BUILD.gn
+new file mode 100644
+index 000000000..7d707c28e
+--- /dev/null
++++ b/chrome/yatesium_update/BUILD.gn
+@@ -0,0 +1,29 @@
++# The Yatesium updater. A small program that uses only the Windows API and
++# the zip reader from zlib, so it stays independent of the browser's code.
++
++assert(is_win)
++
++executable("yatesium_update") {
++  sources = [ "yatesium_update.cc" ]
++
++  deps = [
++    "//build/win:default_exe_manifest",
++    "//third_party/zlib:minizip",
++  ]
++
++  libs = [
++    "bcrypt.lib",
++    "winhttp.lib",
++  ]
++
++  configs -= [
++    "//build/config/clang:find_bad_constructs",
++    "//build/config/clang:unsafe_buffers",
++    "//build/config/compiler:chromium_code",
++    "//build/config/win:console",
++  ]
++  configs += [
++    "//build/config/compiler:no_chromium_code",
++    "//build/config/win:windowed",
++  ]
++}
+diff --git a/chrome/yatesium_update/yatesium_update.cc b/chrome/yatesium_update/yatesium_update.cc
+new file mode 100644
+index 000000000..640dbff26
+--- /dev/null
++++ b/chrome/yatesium_update/yatesium_update.cc
+@@ -0,0 +1,920 @@
++// Yatesium updater.
++//
++// Looks for a newer Yatesium release on GitHub, downloads the zip, checks its
++// SHA-256, and replaces the program files once the browser is closed. The
++// Data folder is never touched, apart from the Data\Update working folder.
++//
++//   yatesium_update.exe --auto   Started by the browser. Checks at most once
++//                                a day, shows nothing, and waits for the
++//                                browser to close before it updates.
++//   yatesium_update.exe          Checks now and reports in a console window.
++//
++// To turn automatic updates off, create an empty file Data\no-update.txt.
++//
++// The program uses only the Windows API and the zip reader from zlib.
++
++#include <windows.h>
++
++#include <bcrypt.h>
++#include <tlhelp32.h>
++#include <winhttp.h>
++
++#include <string>
++#include <vector>
++
++#include "third_party/zlib/contrib/minizip/unzip.h"
++
++#include "third_party/zlib/contrib/minizip/iowin32.h"
++
++namespace {
++
++// Where releases are published. The latest release carries a small text file
++// that names its version and the SHA-256 of its zip.
++const wchar_t kReleaseBase[] =
++    L"https://github.com/ScottYates/Yatesium/releases";
++const wchar_t kLatestFile[] = L"latest.txt";
++const wchar_t kBrowserExe[] = L"yatesium.exe";
++const wchar_t kZipFolder[] = L"Yatesium/";
++const wchar_t kUserAgent[] = L"Yatesium-Updater";
++
++bool g_auto = false;
++HANDLE g_console = nullptr;
++std::wstring g_log_path;
++
++// ---------------------------------------------------------------------------
++// Text helpers.
++
++std::string ToUtf8(const std::wstring& text) {
++  if (text.empty()) {
++    return std::string();
++  }
++  int size = WideCharToMultiByte(CP_UTF8, 0, text.data(),
++                                 static_cast<int>(text.size()), nullptr, 0,
++                                 nullptr, nullptr);
++  std::string out(static_cast<size_t>(size), '\0');
++  WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
++                      &out[0], size, nullptr, nullptr);
++  return out;
++}
++
++std::wstring FromUtf8(const std::string& text) {
++  if (text.empty()) {
++    return std::wstring();
++  }
++  int size = MultiByteToWideChar(CP_UTF8, 0, text.data(),
++                                 static_cast<int>(text.size()), nullptr, 0);
++  std::wstring out(static_cast<size_t>(size), L'\0');
++  MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
++                      &out[0], size);
++  return out;
++}
++
++std::wstring Trim(const std::wstring& text) {
++  size_t begin = 0;
++  size_t end = text.size();
++  while (begin < end && (text[begin] == L' ' || text[begin] == L'\t' ||
++                         text[begin] == L'\r' || text[begin] == L'\n')) {
++    ++begin;
++  }
++  while (end > begin && (text[end - 1] == L' ' || text[end - 1] == L'\t' ||
++                         text[end - 1] == L'\r' || text[end - 1] == L'\n')) {
++    --end;
++  }
++  return text.substr(begin, end - begin);
++}
++
++bool EqualNoCase(const std::wstring& a, const std::wstring& b) {
++  return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
++}
++
++std::wstring Number(unsigned long long value) {
++  wchar_t buffer[32];
++  wsprintfW(buffer, L"%I64u", value);
++  return buffer;
++}
++
++std::wstring LastErrorText(const wchar_t* what) {
++  return std::wstring(what) + L" (error " + Number(GetLastError()) + L")";
++}
++
++void Say(const std::wstring& text) {
++  if (!g_log_path.empty()) {
++    SYSTEMTIME now;
++    GetLocalTime(&now);
++    wchar_t stamp[40];
++    wsprintfW(stamp, L"%04d-%02d-%02d %02d:%02d:%02d  ", now.wYear, now.wMonth,
++              now.wDay, now.wHour, now.wMinute, now.wSecond);
++    std::string line = ToUtf8(stamp + text + L"\r\n");
++    HANDLE file = CreateFileW(g_log_path.c_str(), FILE_APPEND_DATA,
++                              FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
++                              FILE_ATTRIBUTE_NORMAL, nullptr);
++    if (file != INVALID_HANDLE_VALUE) {
++      DWORD written = 0;
++      WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &written,
++                nullptr);
++      CloseHandle(file);
++    }
++  }
++  if (g_console) {
++    std::wstring line = text + L"\r\n";
++    DWORD written = 0;
++    WriteConsoleW(g_console, line.data(), static_cast<DWORD>(line.size()),
++                  &written, nullptr);
++  }
++}
++
++// "157.0.8103.79-2" becomes {157, 0, 8103, 79, 2}. Only digits, dots and
++// dashes are accepted, so a version is also safe to put into a URL or a path.
++bool ParseVersion(const std::wstring& text, std::vector<int>* key) {
++  key->clear();
++  if (text.empty() || text.size() > 40) {
++    return false;
++  }
++  int value = 0;
++  int digits = 0;
++  for (size_t i = 0; i <= text.size(); ++i) {
++    wchar_t c = i < text.size() ? text[i] : L'.';
++    if (c >= L'0' && c <= L'9') {
++      if (++digits > 6) {
++        return false;
++      }
++      value = value * 10 + (c - L'0');
++    } else if (c == L'.' || c == L'-') {
++      if (digits == 0) {
++        return false;
++      }
++      key->push_back(value);
++      value = 0;
++      digits = 0;
++    } else {
++      return false;
++    }
++  }
++  return key->size() >= 2;
++}
++
++bool IsNewer(const std::vector<int>& candidate, const std::vector<int>& current) {
++  size_t count =
++      candidate.size() > current.size() ? candidate.size() : current.size();
++  for (size_t i = 0; i < count; ++i) {
++    int a = i < candidate.size() ? candidate[i] : 0;
++    int b = i < current.size() ? current[i] : 0;
++    if (a != b) {
++      return a > b;
++    }
++  }
++  return false;
++}
++
++// ---------------------------------------------------------------------------
++// File helpers.
++
++bool PathExists(const std::wstring& path) {
++  return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
++}
++
++bool IsDirectory(const std::wstring& path) {
++  DWORD attributes = GetFileAttributesW(path.c_str());
++  return attributes != INVALID_FILE_ATTRIBUTES &&
++         (attributes & FILE_ATTRIBUTE_DIRECTORY);
++}
++
++// Creates a folder and any missing parents.
++bool MakeDirs(const std::wstring& path) {
++  if (IsDirectory(path)) {
++    return true;
++  }
++  size_t slash = path.find_last_of(L"\\/");
++  if (slash != std::wstring::npos && slash > 2) {
++    if (!MakeDirs(path.substr(0, slash))) {
++      return false;
++    }
++  }
++  return CreateDirectoryW(path.c_str(), nullptr) ||
++         GetLastError() == ERROR_ALREADY_EXISTS;
++}
++
++std::vector<std::wstring> ListDir(const std::wstring& dir) {
++  std::vector<std::wstring> names;
++  WIN32_FIND_DATAW data;
++  HANDLE find = FindFirstFileW((dir + L"\\*").c_str(), &data);
++  if (find == INVALID_HANDLE_VALUE) {
++    return names;
++  }
++  do {
++    std::wstring name = data.cFileName;
++    if (name != L"." && name != L"..") {
++      names.push_back(name);
++    }
++  } while (FindNextFileW(find, &data));
++  FindClose(find);
++  return names;
++}
++
++// Deletes a file or a folder with everything in it. Returns false if
++// something could not be deleted, for example a program that is running.
++bool RemoveTree(const std::wstring& path) {
++  DWORD attributes = GetFileAttributesW(path.c_str());
++  if (attributes == INVALID_FILE_ATTRIBUTES) {
++    return true;
++  }
++  if (attributes & FILE_ATTRIBUTE_READONLY) {
++    SetFileAttributesW(path.c_str(), attributes & ~FILE_ATTRIBUTE_READONLY);
++  }
++  if (!(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
++      (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
++    if (attributes & FILE_ATTRIBUTE_DIRECTORY) {
++      return RemoveDirectoryW(path.c_str()) != 0;
++    }
++    return DeleteFileW(path.c_str()) != 0;
++  }
++  bool ok = true;
++  for (const std::wstring& name : ListDir(path)) {
++    if (!RemoveTree(path + L"\\" + name)) {
++      ok = false;
++    }
++  }
++  return RemoveDirectoryW(path.c_str()) != 0 && ok;
++}
++
++bool ReadSmallFile(const std::wstring& path, std::string* content) {
++  content->clear();
++  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
++                            nullptr, OPEN_EXISTING, 0, nullptr);
++  if (file == INVALID_HANDLE_VALUE) {
++    return false;
++  }
++  char buffer[512];
++  DWORD read = 0;
++  bool ok = ReadFile(file, buffer, sizeof(buffer), &read, nullptr) != 0;
++  CloseHandle(file);
++  if (ok) {
++    content->assign(buffer, read);
++  }
++  return ok;
++}
++
++bool WriteSmallFile(const std::wstring& path, const std::string& content) {
++  HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
++                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
++  if (file == INVALID_HANDLE_VALUE) {
++    return false;
++  }
++  DWORD written = 0;
++  bool ok = WriteFile(file, content.data(), static_cast<DWORD>(content.size()),
++                      &written, nullptr) != 0;
++  CloseHandle(file);
++  return ok;
++}
++
++// Reads the version from a version.txt file.
++bool ReadVersionFile(const std::wstring& path, std::wstring* text) {
++  std::string content;
++  if (!ReadSmallFile(path, &content)) {
++    return false;
++  }
++  std::wstring all = FromUtf8(content);
++  size_t line_end = all.find_first_of(L"\r\n");
++  *text = Trim(line_end == std::wstring::npos ? all : all.substr(0, line_end));
++  return true;
++}
++
++// Hours since the file was last written, or -1 if there is no such file.
++double HoursSinceWritten(const std::wstring& path) {
++  WIN32_FILE_ATTRIBUTE_DATA data;
++  if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) {
++    return -1;
++  }
++  FILETIME now;
++  GetSystemTimeAsFileTime(&now);
++  ULARGE_INTEGER a;
++  ULARGE_INTEGER b;
++  a.LowPart = now.dwLowDateTime;
++  a.HighPart = now.dwHighDateTime;
++  b.LowPart = data.ftLastWriteTime.dwLowDateTime;
++  b.HighPart = data.ftLastWriteTime.dwHighDateTime;
++  if (a.QuadPart < b.QuadPart) {
++    return -1;  // Written in the future: the clock changed, check again.
++  }
++  return static_cast<double>(a.QuadPart - b.QuadPart) / 36000000000.0;
++}
++
++bool Sha256OfFile(const std::wstring& path, std::wstring* hex) {
++  hex->clear();
++  HANDLE file =
++      CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
++                  OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
++  if (file == INVALID_HANDLE_VALUE) {
++    return false;
++  }
++  BCRYPT_ALG_HANDLE algorithm = nullptr;
++  BCRYPT_HASH_HANDLE hash = nullptr;
++  bool ok = false;
++  UCHAR digest[32];
++  if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr,
++                                  0) == 0 &&
++      BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) == 0) {
++    std::vector<UCHAR> buffer(1 << 16);
++    ok = true;
++    for (;;) {
++      DWORD read = 0;
++      if (!ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()),
++                    &read, nullptr)) {
++        ok = false;
++        break;
++      }
++      if (read == 0) {
++        break;
++      }
++      if (BCryptHashData(hash, buffer.data(), read, 0) != 0) {
++        ok = false;
++        break;
++      }
++    }
++    if (ok) {
++      ok = BCryptFinishHash(hash, digest, sizeof(digest), 0) == 0;
++    }
++  }
++  if (hash) {
++    BCryptDestroyHash(hash);
++  }
++  if (algorithm) {
++    BCryptCloseAlgorithmProvider(algorithm, 0);
++  }
++  CloseHandle(file);
++  if (ok) {
++    const wchar_t kDigits[] = L"0123456789abcdef";
++    for (UCHAR byte : digest) {
++      hex->push_back(kDigits[byte >> 4]);
++      hex->push_back(kDigits[byte & 15]);
++    }
++  }
++  return ok;
++}
++
++// ---------------------------------------------------------------------------
++// Download.
++
++// Fetches |url|. The body goes to |file_path| if that is not empty, and
++// otherwise into |body|, which is limited to |max_body| bytes.
++bool HttpGet(const std::wstring& url,
++             const std::wstring& file_path,
++             std::string* body,
++             size_t max_body,
++             std::wstring* error) {
++  wchar_t host[256];
++  wchar_t path[2048];
++  URL_COMPONENTS parts = {};
++  parts.dwStructSize = sizeof(parts);
++  parts.lpszHostName = host;
++  parts.dwHostNameLength = 256;
++  parts.lpszUrlPath = path;
++  parts.dwUrlPathLength = 2048;
++  if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts)) {
++    *error = LastErrorText(L"The address is not valid");
++    return false;
++  }
++  const bool secure = parts.nScheme == INTERNET_SCHEME_HTTPS;
++
++  HINTERNET session =
++      WinHttpOpen(kUserAgent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
++                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
++  if (!session) {
++    // Windows before 8.1 does not know the automatic proxy setting.
++    session = WinHttpOpen(kUserAgent, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
++                          WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
++  }
++  HINTERNET connection = nullptr;
++  HINTERNET request = nullptr;
++  HANDLE file = INVALID_HANDLE_VALUE;
++  bool ok = false;
++  do {
++    if (!session) {
++      *error = LastErrorText(L"Could not start a network session");
++      break;
++    }
++    WinHttpSetTimeouts(session, 30000, 30000, 60000, 60000);
++    connection = WinHttpConnect(session, host, parts.nPort, 0);
++    if (!connection) {
++      *error = LastErrorText(L"Could not connect");
++      break;
++    }
++    request = WinHttpOpenRequest(connection, L"GET", path, nullptr,
++                                 WINHTTP_NO_REFERER,
++                                 WINHTTP_DEFAULT_ACCEPT_TYPES,
++                                 secure ? WINHTTP_FLAG_SECURE : 0);
++    if (!request) {
++      *error = LastErrorText(L"Could not create the request");
++      break;
++    }
++    if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
++                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
++        !WinHttpReceiveResponse(request, nullptr)) {
++      *error = LastErrorText(L"The request failed");
++      break;
++    }
++    DWORD status = 0;
++    DWORD status_size = sizeof(status);
++    if (!WinHttpQueryHeaders(
++            request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
++            WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
++            WINHTTP_NO_HEADER_INDEX)) {
++      *error = LastErrorText(L"No status in the response");
++      break;
++    }
++    if (status != 200) {
++      *error = L"The server answered with status " + Number(status);
++      break;
++    }
++    if (!file_path.empty()) {
++      file = CreateFileW(file_path.c_str(), GENERIC_WRITE, 0, nullptr,
++                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
++      if (file == INVALID_HANDLE_VALUE) {
++        *error = LastErrorText(L"Could not create the download file");
++        break;
++      }
++    }
++    std::vector<char> buffer(1 << 16);
++    bool failed = false;
++    for (;;) {
++      DWORD read = 0;
++      if (!WinHttpReadData(request, buffer.data(),
++                           static_cast<DWORD>(buffer.size()), &read)) {
++        *error = LastErrorText(L"The download was interrupted");
++        failed = true;
++        break;
++      }
++      if (read == 0) {
++        break;
++      }
++      if (file != INVALID_HANDLE_VALUE) {
++        DWORD written = 0;
++        if (!WriteFile(file, buffer.data(), read, &written, nullptr) ||
++            written != read) {
++          *error = LastErrorText(L"Could not write the download file");
++          failed = true;
++          break;
++        }
++      } else {
++        if (body->size() + read > max_body) {
++          *error = L"The answer is larger than expected";
++          failed = true;
++          break;
++        }
++        body->append(buffer.data(), read);
++      }
++    }
++    ok = !failed;
++  } while (false);
++
++  if (file != INVALID_HANDLE_VALUE) {
++    CloseHandle(file);
++  }
++  if (request) {
++    WinHttpCloseHandle(request);
++  }
++  if (connection) {
++    WinHttpCloseHandle(connection);
++  }
++  if (session) {
++    WinHttpCloseHandle(session);
++  }
++  return ok;
++}
++
++// ---------------------------------------------------------------------------
++// Zip.
++
++// Extracts the "Yatesium/" folder of the zip into |dest_dir|. Entries outside
++// that folder, or with names that could leave |dest_dir|, are refused.
++bool ExtractZip(const std::wstring& zip_path,
++                const std::wstring& dest_dir,
++                std::wstring* error) {
++  zlib_filefunc64_def functions;
++  fill_win32_filefunc64W(&functions);
++  unzFile zip = unzOpen2_64(zip_path.c_str(), &functions);
++  if (!zip) {
++    *error = L"The zip could not be opened";
++    return false;
++  }
++  const std::wstring prefix = kZipFolder;
++  std::vector<char> buffer(1 << 16);
++  bool ok = true;
++  int result = unzGoToFirstFile(zip);
++  while (ok && result == UNZ_OK) {
++    char raw_name[1024];
++    unz_file_info64 info;
++    if (unzGetCurrentFileInfo64(zip, &info, raw_name, sizeof(raw_name) - 1,
++                                nullptr, 0, nullptr, 0) != UNZ_OK) {
++      *error = L"The zip has an entry that cannot be read";
++      ok = false;
++      break;
++    }
++    raw_name[sizeof(raw_name) - 1] = '\0';
++    std::wstring name = FromUtf8(raw_name);
++    if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0 ||
++        name.find(L"..") != std::wstring::npos ||
++        name.find(L':') != std::wstring::npos ||
++        name.find(L'\\') != std::wstring::npos ||
++        name.find(L"//") != std::wstring::npos) {
++      *error = L"The zip has an unexpected entry: " + name;
++      ok = false;
++      break;
++    }
++    std::wstring relative = name.substr(prefix.size());
++    for (wchar_t& c : relative) {
++      if (c == L'/') {
++        c = L'\\';
++      }
++    }
++    std::wstring target = dest_dir + L"\\" + relative;
++    if (target.back() == L'\\') {
++      target.pop_back();
++      if (!MakeDirs(target)) {
++        *error = LastErrorText(L"Could not create a folder");
++        ok = false;
++      }
++    } else {
++      size_t slash = target.find_last_of(L'\\');
++      if (!MakeDirs(target.substr(0, slash))) {
++        *error = LastErrorText(L"Could not create a folder");
++        ok = false;
++        break;
++      }
++      if (unzOpenCurrentFile(zip) != UNZ_OK) {
++        *error = L"Could not read from the zip: " + name;
++        ok = false;
++        break;
++      }
++      HANDLE file = CreateFileW(target.c_str(), GENERIC_WRITE, 0, nullptr,
++                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
++      if (file == INVALID_HANDLE_VALUE) {
++        *error = LastErrorText(L"Could not create a file");
++        ok = false;
++      }
++      while (ok) {
++        int read = unzReadCurrentFile(zip, buffer.data(),
++                                      static_cast<unsigned>(buffer.size()));
++        if (read < 0) {
++          *error = L"The zip is damaged: " + name;
++          ok = false;
++        } else if (read == 0) {
++          break;
++        } else {
++          DWORD written = 0;
++          if (!WriteFile(file, buffer.data(), static_cast<DWORD>(read),
++                         &written, nullptr) ||
++              written != static_cast<DWORD>(read)) {
++            *error = LastErrorText(L"Could not write a file");
++            ok = false;
++          }
++        }
++      }
++      if (file != INVALID_HANDLE_VALUE) {
++        CloseHandle(file);
++      }
++      // Closing also checks the checksum of the entry.
++      if (unzCloseCurrentFile(zip) != UNZ_OK && ok) {
++        *error = L"The zip is damaged: " + name;
++        ok = false;
++      }
++    }
++    if (ok) {
++      result = unzGoToNextFile(zip);
++    }
++  }
++  if (ok && result != UNZ_END_OF_LIST_OF_FILE) {
++    *error = L"The zip is damaged";
++    ok = false;
++  }
++  unzClose(zip);
++  return ok;
++}
++
++// ---------------------------------------------------------------------------
++// Browser state and the swap.
++
++// True while a yatesium.exe from |install_dir| is running.
++bool BrowserRunning(const std::wstring& install_dir) {
++  const std::wstring target = install_dir + L"\\" + kBrowserExe;
++  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
++  if (snapshot == INVALID_HANDLE_VALUE) {
++    return true;
++  }
++  bool running = false;
++  PROCESSENTRY32W entry;
++  entry.dwSize = sizeof(entry);
++  if (Process32FirstW(snapshot, &entry)) {
++    do {
++      if (!EqualNoCase(entry.szExeFile, kBrowserExe)) {
++        continue;
++      }
++      HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
++                                   entry.th32ProcessID);
++      if (!process) {
++        // It may have just exited. If it is still there but cannot be
++        // inspected, count it as running.
++        if (GetLastError() != ERROR_INVALID_PARAMETER) {
++          running = true;
++        }
++        continue;
++      }
++      wchar_t image[MAX_PATH * 4];
++      DWORD size = MAX_PATH * 4;
++      if (!QueryFullProcessImageNameW(process, 0, image, &size) ||
++          EqualNoCase(image, target)) {
++        running = true;
++      }
++      CloseHandle(process);
++    } while (!running && Process32NextW(snapshot, &entry));
++  }
++  CloseHandle(snapshot);
++  return running;
++}
++
++void WaitForBrowserToClose(const std::wstring& install_dir) {
++  for (;;) {
++    while (BrowserRunning(install_dir)) {
++      Sleep(5000);
++    }
++    Sleep(3000);
++    if (!BrowserRunning(install_dir)) {
++      return;
++    }
++  }
++}
++
++// Moves the old program files to |old_dir| and the new ones from |new_dir|
++// into |install_dir|. All three are on the same drive, so each move is a
++// rename, which also works for this program while it runs. If a move fails,
++// the old files are put back.
++bool SwapFiles(const std::wstring& install_dir,
++               const std::wstring& new_dir,
++               const std::wstring& old_dir,
++               std::wstring* error) {
++  if (!MakeDirs(old_dir)) {
++    *error = LastErrorText(L"Could not create the folder for the old version");
++    return false;
++  }
++  std::vector<std::wstring> moved_out;
++  std::vector<std::wstring> moved_in;
++  bool ok = true;
++  for (const std::wstring& name : ListDir(install_dir)) {
++    if (EqualNoCase(name, L"Data")) {
++      continue;
++    }
++    if (!MoveFileExW((install_dir + L"\\" + name).c_str(),
++                     (old_dir + L"\\" + name).c_str(), 0)) {
++      *error = LastErrorText((L"Could not move " + name).c_str());
++      ok = false;
++      break;
++    }
++    moved_out.push_back(name);
++  }
++  if (ok) {
++    for (const std::wstring& name : ListDir(new_dir)) {
++      if (EqualNoCase(name, L"Data")) {
++        continue;
++      }
++      if (!MoveFileExW((new_dir + L"\\" + name).c_str(),
++                       (install_dir + L"\\" + name).c_str(), 0)) {
++        *error = LastErrorText((L"Could not put " + name + L" in place").c_str());
++        ok = false;
++        break;
++      }
++      moved_in.push_back(name);
++    }
++  }
++  if (ok) {
++    return true;
++  }
++  for (const std::wstring& name : moved_in) {
++    MoveFileExW((install_dir + L"\\" + name).c_str(),
++                (new_dir + L"\\" + name).c_str(), 0);
++  }
++  for (const std::wstring& name : moved_out) {
++    MoveFileExW((old_dir + L"\\" + name).c_str(),
++                (install_dir + L"\\" + name).c_str(), 0);
++  }
++  *error += L". The old version was put back";
++  return false;
++}
++
++std::wstring ExeDir() {
++  wchar_t path[MAX_PATH * 4];
++  DWORD size = GetModuleFileNameW(nullptr, path, MAX_PATH * 4);
++  std::wstring full(path, size);
++  size_t slash = full.find_last_of(L'\\');
++  return slash == std::wstring::npos ? full : full.substr(0, slash);
++}
++
++// A name for the mutex that is the same for every updater of this folder.
++std::wstring MutexName(const std::wstring& install_dir) {
++  unsigned long long hash = 1469598103934665603ULL;
++  for (wchar_t c : install_dir) {
++    if (c >= L'A' && c <= L'Z') {
++      c = static_cast<wchar_t>(c - L'A' + L'a');
++    }
++    hash = (hash ^ static_cast<unsigned long long>(c)) * 1099511628211ULL;
++  }
++  return L"YatesiumUpdate-" + Number(hash);
++}
++
++// Returns false if something went wrong. Being up to date is not an error.
++bool Update(const std::wstring& install_dir,
++            const std::wstring& release_base,
++            std::wstring* error) {
++  const std::wstring work_dir = install_dir + L"\\Data\\Update";
++
++  std::wstring current_text;
++  std::vector<int> current;
++  if (!ReadVersionFile(install_dir + L"\\version.txt", &current_text) ||
++      !ParseVersion(current_text, &current)) {
++    *error = L"version.txt is missing or does not hold a version";
++    return false;
++  }
++
++  // Leftovers of an earlier update, such as the old copy of this program
++  // that could not be deleted while it was running.
++  for (const std::wstring& name : ListDir(work_dir)) {
++    if (name == L"new" || name.compare(0, 4, L"old-") == 0) {
++      RemoveTree(work_dir + L"\\" + name);
++    }
++  }
++
++  const std::wstring stamp_path = work_dir + L"\\last-check.txt";
++  if (g_auto) {
++    // Let the browser finish starting, then check at most once a day.
++    Sleep(60000);
++    double hours = HoursSinceWritten(stamp_path);
++    if (hours >= 0 && hours < 24) {
++      return true;
++    }
++  }
++
++  // latest.txt holds one line: "<version> <SHA-256 of the zip>".
++  std::string latest_body;
++  if (!HttpGet(release_base + L"/latest/download/" + kLatestFile, std::wstring(),
++               &latest_body, 4096, error)) {
++    *error = L"Could not check for a new release. " + *error;
++    return false;
++  }
++  WriteSmallFile(stamp_path, "checked\r\n");
++
++  std::wstring latest_line = Trim(FromUtf8(latest_body));
++  size_t space = latest_line.find(L' ');
++  std::wstring latest_text =
++      space == std::wstring::npos ? latest_line : latest_line.substr(0, space);
++  std::wstring expected_hash =
++      space == std::wstring::npos ? std::wstring()
++                                  : Trim(latest_line.substr(space + 1));
++  std::vector<int> latest;
++  if (!ParseVersion(latest_text, &latest)) {
++    *error = L"The release information is not in the expected form";
++    return false;
++  }
++  if (!IsNewer(latest, current)) {
++    Say(L"Yatesium " + current_text + L" is up to date.");
++    return true;
++  }
++  if (expected_hash.size() != 64 ||
++      expected_hash.find_first_not_of(L"0123456789abcdef") !=
++          std::wstring::npos) {
++    *error = L"Release " + latest_text + L" does not publish a SHA-256";
++    return false;
++  }
++
++  const std::wstring zip_name = L"Yatesium-" + latest_text + L"-win-x64.zip";
++  const std::wstring zip_path = work_dir + L"\\" + zip_name;
++  for (const std::wstring& name : ListDir(work_dir)) {
++    const bool is_download =
++        (name.size() > 4 && name.compare(name.size() - 4, 4, L".zip") == 0) ||
++        (name.size() > 5 && name.compare(name.size() - 5, 5, L".part") == 0);
++    if (is_download && !EqualNoCase(name, zip_name)) {
++      RemoveTree(work_dir + L"\\" + name);
++    }
++  }
++  std::wstring actual_hash;
++  if (!PathExists(zip_path) || !Sha256OfFile(zip_path, &actual_hash) ||
++      actual_hash != expected_hash) {
++    Say(L"Downloading Yatesium " + latest_text + L"...");
++    const std::wstring part_path = zip_path + L".part";
++    if (!HttpGet(release_base + L"/download/v" + latest_text + L"/" + zip_name,
++                 part_path, nullptr, 0, error)) {
++      DeleteFileW(part_path.c_str());
++      *error = L"Could not download the release. " + *error;
++      return false;
++    }
++    if (!Sha256OfFile(part_path, &actual_hash) || actual_hash != expected_hash) {
++      DeleteFileW(part_path.c_str());
++      *error = L"The download does not match the published SHA-256. "
++               L"Nothing was changed";
++      return false;
++    }
++    if (!MoveFileExW(part_path.c_str(), zip_path.c_str(),
++                     MOVEFILE_REPLACE_EXISTING)) {
++      *error = LastErrorText(L"Could not store the download");
++      return false;
++    }
++  }
++
++  const std::wstring new_dir = work_dir + L"\\new";
++  RemoveTree(new_dir);
++  if (!ExtractZip(zip_path, new_dir, error)) {
++    RemoveTree(new_dir);
++    return false;
++  }
++  std::wstring new_text;
++  std::vector<int> new_version;
++  if (!PathExists(new_dir + L"\\" + kBrowserExe) ||
++      !ReadVersionFile(new_dir + L"\\version.txt", &new_text) ||
++      !ParseVersion(new_text, &new_version) || !IsNewer(new_version, current)) {
++    RemoveTree(new_dir);
++    *error = L"The zip does not hold a newer Yatesium build";
++    return false;
++  }
++
++  if (BrowserRunning(install_dir)) {
++    Say(L"Yatesium " + new_text +
++        L" is ready. It will be installed when the browser is closed.");
++    WaitForBrowserToClose(install_dir);
++  }
++
++  const std::wstring old_dir = work_dir + L"\\old-" + current_text;
++  RemoveTree(old_dir);
++  if (!SwapFiles(install_dir, new_dir, old_dir, error)) {
++    return false;
++  }
++  Say(L"Updated Yatesium from " + current_text + L" to " + new_text + L".");
++
++  // The old copy of this program is still running and stays behind. The next
++  // run removes it.
++  RemoveTree(old_dir);
++  RemoveTree(new_dir);
++  DeleteFileW(zip_path.c_str());
++  return true;
++}
++
++}  // namespace
++
++int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t* command_line, int) {
++  const std::wstring arguments = command_line ? command_line : L"";
++  g_auto = arguments.find(L"--auto") != std::wstring::npos;
++
++  std::wstring release_base = kReleaseBase;
++#if defined(YATESIUM_UPDATE_TEST_SOURCE)
++  // Test builds can read releases from another server.
++  size_t source = arguments.find(L"--source=");
++  if (source != std::wstring::npos) {
++    release_base = arguments.substr(source + 9);
++    release_base = Trim(release_base.substr(0, release_base.find(L' ')));
++  }
++#endif
++
++  const std::wstring install_dir = ExeDir();
++  const std::wstring data_dir = install_dir + L"\\Data";
++  if (g_auto && PathExists(data_dir + L"\\no-update.txt")) {
++    return 0;
++  }
++
++  if (!g_auto && AllocConsole()) {
++    SetConsoleTitleW(L"Yatesium update");
++    g_console = GetStdHandle(STD_OUTPUT_HANDLE);
++  }
++
++  int exit_code = 0;
++  HANDLE mutex = CreateMutexW(nullptr, FALSE, MutexName(install_dir).c_str());
++  DWORD wait = mutex ? WaitForSingleObject(mutex, 0) : WAIT_FAILED;
++  if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {
++    // Another updater is already working on this folder.
++    Say(L"An update is already in progress for this folder.");
++  } else {
++    if (MakeDirs(data_dir + L"\\Update")) {
++      g_log_path = data_dir + L"\\Update\\update.log";
++      WIN32_FILE_ATTRIBUTE_DATA log_data;
++      if (GetFileAttributesExW(g_log_path.c_str(), GetFileExInfoStandard,
++                               &log_data) &&
++          (log_data.nFileSizeHigh != 0 || log_data.nFileSizeLow > 200000)) {
++        DeleteFileW(g_log_path.c_str());
++      }
++    }
++    std::wstring error;
++    if (!Update(install_dir, release_base, &error)) {
++      Say(L"Update failed: " + error + L".");
++      exit_code = 1;
++    }
++    ReleaseMutex(mutex);
++  }
++  if (mutex) {
++    CloseHandle(mutex);
++  }
++
++  if (g_console) {
++    const wchar_t kPrompt[] = L"\r\nPress Enter to close this window.";
++    DWORD count = 0;
++    WriteConsoleW(g_console, kPrompt, lstrlenW(kPrompt), &count, nullptr);
++    wchar_t input[8];
++    ReadConsoleW(GetStdHandle(STD_INPUT_HANDLE), input, 8, &count, nullptr);
++  }
++  return exit_code;
++}

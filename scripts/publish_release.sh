@@ -28,21 +28,25 @@ fi
 tag="v$version"
 
 sha256=$(sha256sum "$zip" | cut -d' ' -f1)
+
+# The updater in the browser folder reads this file from the latest release.
+latest="$dir/latest.txt"
+echo "$version $sha256" > "$latest"
 notes="Portable build for Windows x64. Extract the zip and run yatesium.exe.
 
 Built from commit $commit.
 SHA-256: $sha256"
 
 if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-  gh release upload "$tag" "$zip" --repo "$GITHUB_REPOSITORY" --clobber
+  gh release upload "$tag" "$zip" "$latest" --repo "$GITHUB_REPOSITORY" --clobber
   gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes "$notes"
 else
   # The workflow token may not tag a commit whose workflow files differ from
   # the default branch. In that case the tag goes on the default branch; the
   # notes still name the commit that was built.
-  gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" \
+  gh release create "$tag" "$zip" "$latest" --repo "$GITHUB_REPOSITORY" \
     --target "$commit" --title "Yatesium $version" --notes "$notes" ||
-  gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" \
+  gh release create "$tag" "$zip" "$latest" --repo "$GITHUB_REPOSITORY" \
     --title "Yatesium $version" --notes "$notes"
 fi
 echo "Published $tag"
