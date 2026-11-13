@@ -97,10 +97,54 @@ Things already present in Yatesium are left out of the list. Nothing is read
 from another browser until the page is opened, and nothing is imported
 without the button. The other browser can stay open during the import.
 
+A web app window does not show the "Uninstall" button that Chromium puts in
+the title bar on the first start of a new app. "Uninstall" is in the
+window's three-dot menu.
+
 After an import, open `yatesium://apps` to see the web apps that are now
 installed. Each app there can be started, and its right-click menu creates or
 removes its desktop and Start menu shortcuts. Imported extensions are listed
 on `yatesium://extensions`.
+
+## Settings file (backup and restore)
+
+`yatesium://import` also saves this browser's setup to one file and reads it
+back.
+
+"Export to a settings file" asks where to save and writes a zip that holds:
+
+- bookmarks
+- browser settings
+- installed web apps, with their icons
+- extensions, with the data they stored (their settings, filter lists,
+  scripts and databases)
+
+It does not hold history, saved passwords, cookies or sign-ins, custom search
+engines, or the entries of `yatesium://flags`. Data that an extension keeps in
+the page-style "localStorage" is not included either.
+
+"Import from a settings file" asks for the file, shows what it holds, and
+offers two ways to use it:
+
+- "Replace everything and relaunch". The browser restarts and then matches
+  the file in those four areas. What was there before is overwritten,
+  including bookmarks, web apps and extensions that the file does not have.
+  History, saved passwords and sign-ins are kept.
+- "Add to this browser". A list with checkboxes, like the one for other
+  browsers. Ticked bookmarks, web apps and extensions are added to what is
+  already here. "Settings" applies the file's settings over the current ones;
+  only the settings that Chromium would sync between installations are taken.
+  An extension brings its stored data along if this browser has none for it.
+
+Notes:
+
+- The file is a plain zip and is not encrypted. It contains the list of your
+  bookmarks and extensions.
+- The browser is running while it exports. A file it is writing at that
+  moment can be missed; export again if something looks incomplete.
+- After "Replace everything" on another computer, web apps are installed but
+  their desktop and Start menu shortcuts may be missing. Create them from
+  `yatesium://apps`.
 
 ## Google sign-in and sync
 
@@ -348,7 +392,8 @@ only the files they touch are recompiled.
 | `patches/0011`, `0012` | No telemetry, no Safe Browsing |
 | `patches/0013` | The updater program, and the browser change that starts it |
 | `patches/0014` | Flags for the user's own Google API credentials |
-| `patches/0015` | The import page for bookmarks, web apps and extensions |
+| `patches/0015` | The import page: other browsers, and export to and import from a settings file |
+| `patches/0016` | No "Uninstall" button in the title bar of web app windows |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |

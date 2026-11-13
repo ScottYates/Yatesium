@@ -15,7 +15,7 @@ index 814b9d649..60de87615 100644
        "icon_loader_win.cc",
        "memory_details_win.cc",
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index 1651c5def..54a0964a2 100644
+index 1651c5def..87fb0a15c 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
 @@ -251,6 +251,7 @@
@@ -40,6 +40,18 @@ index 1651c5def..54a0964a2 100644
      }
    }
  #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+@@ -1912,6 +1920,11 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+ 
+   // This step is costly and is already measured in Startup.CreateFirstProfile
+   // and more directly Profile.CreateAndInitializeProfile.
++#if BUILDFLAG(IS_WIN)
++  // Yatesium: a "replace everything" import from a settings file is carried
++  // out here, before any profile opens its files.
++  yatesium::ApplyPendingRestore(user_data_dir_);
++#endif
+   StartupProfileInfo profile_info = CreateInitialProfile(
+       user_data_dir_, *base::CommandLine::ForCurrentProcess());
+ 
 diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 index d79e9dfdb..57d21b5ee 100644
 --- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
@@ -65,10 +77,10 @@ index d79e9dfdb..57d21b5ee 100644
    map.AddWebUIConfig(std::make_unique<FamilyLinkUserInternalsUIConfig>());
 diff --git a/chrome/browser/yatesium_import.cc b/chrome/browser/yatesium_import.cc
 new file mode 100644
-index 000000000..e40175562
+index 000000000..7c8b866a8
 --- /dev/null
 +++ b/chrome/browser/yatesium_import.cc
-@@ -0,0 +1,1102 @@
+@@ -0,0 +1,1658 @@
 +// Yatesium: the import page. See yatesium_import.h.
 +//
 +// How the page works: it is plain HTML built here, with no script. Each
@@ -76,6 +88,10 @@ index 000000000..e40175562
 +// on this page, with a token that is valid once. The list of what was found
 +// is kept from the last time the page was shown, and the form refers to
 +// entries of that list.
++//
++// The same page exports this profile to a settings file ("export?...") and
++// imports from one ("open?...", then "run?..." to add or "restore?..." to
++// replace everything).
 +
 +#include "chrome/browser/yatesium_import.h"
 +
@@ -104,6 +120,7 @@ index 000000000..e40175562
 +#include "base/strings/string_number_conversions.h"
 +#include "base/strings/string_util.h"
 +#include "base/strings/utf_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
 +#include "base/task/single_thread_task_runner.h"
 +#include "base/task/task_traits.h"
 +#include "base/task/thread_pool.h"
@@ -112,6 +129,7 @@ index 000000000..e40175562
 +#include "base/version.h"
 +#include "base/win/shortcut.h"
 +#include "chrome/browser/bookmarks/bookmark_model_factory.h"
++#include "chrome/browser/lifetime/application_lifetime.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/web_applications/proto/web_app.pb.h"
 +#include "chrome/browser/web_applications/web_app_command_scheduler.h"
@@ -122,11 +140,14 @@ index 000000000..e40175562
 +#include "chrome/browser/web_applications/web_app_registrar.h"
 +#include "components/bookmarks/browser/bookmark_model.h"
 +#include "components/bookmarks/browser/bookmark_node.h"
++#include "components/pref_registry/pref_registry_syncable.h"
++#include "components/prefs/pref_service.h"
 +#include "components/sync/protocol/web_app_specifics.pb.h"
 +#include "components/webapps/browser/install_result_code.h"
 +#include "components/webapps/browser/installable/installable_metrics.h"
 +#include "components/webapps/common/web_app_id.h"
 +#include "content/public/browser/url_data_source.h"
++#include "content/public/browser/web_contents.h"
 +#include "content/public/browser/web_ui.h"
 +#include "content/public/common/url_constants.h"
 +#include "extensions/browser/crx_installer.h"
@@ -140,7 +161,11 @@ index 000000000..e40175562
 +#include "third_party/leveldatabase/src/include/leveldb/slice.h"
 +#include "third_party/leveldatabase/src/include/leveldb/status.h"
 +#include "third_party/skia/include/core/SkBitmap.h"
++#include "third_party/zlib/google/zip.h"
 +#include "ui/gfx/codec/png_codec.h"
++#include "ui/gfx/native_ui_types.h"
++#include "ui/shell_dialogs/select_file_dialog.h"
++#include "ui/shell_dialogs/selected_file_info.h"
 +#include "url/gurl.h"
 +#include "url/origin.h"
 +
@@ -880,6 +905,274 @@ index 000000000..e40175562
 +}
 +
 +// ---------------------------------------------------------------------------
++// Settings files. The functions that touch files run on the thread pool.
++
++// Writes the profile's bookmarks, settings, web apps and extensions with
++// their data into the zip `dest_file`.
++bool ExportSettings(const base::FilePath& profile_dir,
++                    const base::FilePath& dest_file) {
++  base::ScopedTempDir staging;
++  if (!staging.CreateUniqueTempDir()) {
++    return false;
++  }
++  const base::FilePath root = staging.GetPath();
++  const base::FilePath out = root.AppendASCII(kSettingsProfileDir);
++  if (!base::CreateDirectory(out)) {
++    return false;
++  }
++  for (const char* file : kSettingsFiles) {
++    const base::FilePath from = profile_dir.AppendASCII(file);
++    if (base::PathExists(from)) {
++      base::CopyFile(from, out.AppendASCII(file));
++    }
++  }
++  // The browser has these folders open. Files it is writing at this moment
++  // may be skipped; the databases are built to be read without them.
++  for (const char* dir : kSettingsDirs) {
++    const base::FilePath from = AppendRelative(profile_dir, dir);
++    if (base::DirectoryExists(from)) {
++      CopyTree(from, AppendRelative(out, dir));
++    }
++  }
++  base::FileEnumerator databases(profile_dir.AppendASCII(kIndexedDBDir),
++                                 /*recursive=*/false,
++                                 base::FileEnumerator::DIRECTORIES);
++  for (base::FilePath database = databases.Next(); !database.empty();
++       database = databases.Next()) {
++    if (database.BaseName().AsUTF8Unsafe().starts_with(
++            kExtensionDatabasePrefix)) {
++      CopyTree(database,
++               out.AppendASCII(kIndexedDBDir).Append(database.BaseName()));
++    }
++  }
++  if (!base::WriteFile(root.AppendASCII(kSettingsMarkerFile),
++                       "{\"product\":\"Yatesium\",\"format\":1}\n")) {
++    return false;
++  }
++  base::DeleteFile(dest_file);
++  return zip::Zip(root, dest_file, /*include_hidden_files=*/true);
++}
++
++struct OpenedFile {
++  bool ok = false;
++  base::FilePath temp_dir;
++  SourceProfile source;
++  bool has_settings = false;
++};
++
++// Unpacks a settings file into a temporary folder and lists what it holds.
++OpenedFile OpenSettingsFile(const base::FilePath& zip_file) {
++  OpenedFile opened;
++  base::FilePath temp_dir;
++  if (!base::CreateNewTempDirectory(FILE_PATH_LITERAL("yatesium_import"),
++                                    &temp_dir)) {
++    return opened;
++  }
++  const base::FilePath profile_dir = temp_dir.AppendASCII(kSettingsProfileDir);
++  if (!zip::Unzip(zip_file, temp_dir) ||
++      !base::PathExists(temp_dir.AppendASCII(kSettingsMarkerFile)) ||
++      !base::DirectoryExists(profile_dir)) {
++    base::DeletePathRecursively(temp_dir);
++    return opened;
++  }
++  opened.ok = true;
++  opened.temp_dir = temp_dir;
++  opened.has_settings = base::PathExists(profile_dir.AppendASCII("Preferences"));
++  opened.source.browser = "Settings file";
++  opened.source.profile_name = zip_file.BaseName().AsUTF8Unsafe();
++  opened.source.profile_dir = profile_dir;
++  opened.source.from_settings_file = true;
++  opened.source.bookmark_count = CountBookmarksInProfile(profile_dir);
++  opened.source.apps = ReadApps(profile_dir);
++  opened.source.extensions = ReadExtensions(profile_dir);
++  return opened;
++}
++
++// Puts the unpacked settings file where the next start of the browser finds
++// it. See ApplyPendingRestore().
++bool StageRestore(const base::FilePath& unpacked_profile,
++                  const base::FilePath& profile_dir) {
++  const base::FilePath restore_dir = profile_dir.AppendASCII(kRestoreDirName);
++  base::DeletePathRecursively(restore_dir);
++  if (!base::CreateDirectory(restore_dir)) {
++    return false;
++  }
++  const base::FilePath target = restore_dir.AppendASCII(kSettingsProfileDir);
++  if (!base::Move(unpacked_profile, target) &&
++      !CopyTree(unpacked_profile, target)) {
++    base::DeletePathRecursively(restore_dir);
++    return false;
++  }
++  return base::WriteFile(restore_dir.AppendASCII(kRestoreReadyFile), "1");
++}
++
++// Replaces the parts of one profile that a settings file carries with the
++// staged ones. Parts the file does not have are removed, so the profile ends
++// up matching the file.
++void RestoreProfile(const base::FilePath& profile_dir,
++                    const base::FilePath& source) {
++  for (const char* file : kSettingsFiles) {
++    const base::FilePath target = profile_dir.AppendASCII(file);
++    const base::FilePath from = source.AppendASCII(file);
++    base::DeleteFile(target);
++    if (base::PathExists(from)) {
++      base::Move(from, target);
++    }
++  }
++  for (const char* dir : kSettingsDirs) {
++    const base::FilePath target = AppendRelative(profile_dir, dir);
++    const base::FilePath from = AppendRelative(source, dir);
++    base::DeletePathRecursively(target);
++    if (base::DirectoryExists(from)) {
++      base::CreateDirectory(target.DirName());
++      base::Move(from, target);
++    }
++  }
++  const base::FilePath databases_dir = profile_dir.AppendASCII(kIndexedDBDir);
++  std::vector<base::FilePath> old_databases;
++  {
++    base::FileEnumerator databases(databases_dir, /*recursive=*/false,
++                                   base::FileEnumerator::DIRECTORIES);
++    for (base::FilePath database = databases.Next(); !database.empty();
++         database = databases.Next()) {
++      if (database.BaseName().AsUTF8Unsafe().starts_with(
++              kExtensionDatabasePrefix)) {
++        old_databases.push_back(database);
++      }
++    }
++  }
++  for (const base::FilePath& database : old_databases) {
++    base::DeletePathRecursively(database);
++  }
++  std::vector<base::FilePath> new_databases;
++  {
++    base::FileEnumerator databases(source.AppendASCII(kIndexedDBDir),
++                                   /*recursive=*/false,
++                                   base::FileEnumerator::DIRECTORIES);
++    for (base::FilePath database = databases.Next(); !database.empty();
++         database = databases.Next()) {
++      new_databases.push_back(database);
++    }
++  }
++  for (const base::FilePath& database : new_databases) {
++    base::CreateDirectory(databases_dir);
++    base::Move(database, databases_dir.Append(database.BaseName()));
++  }
++}
++
++// Settings from a settings file, for adding them to the running profile.
++struct SettingsFromFile {
++  std::optional<base::DictValue> preferences;
++  std::optional<base::DictValue> secure_preferences;
++};
++
++SettingsFromFile ReadSettingsFromFile(const base::FilePath& profile_dir) {
++  SettingsFromFile settings;
++  settings.preferences = ReadJsonFile(profile_dir.AppendASCII("Preferences"));
++  settings.secure_preferences =
++      ReadJsonFile(profile_dir.AppendASCII("Secure Preferences"));
++  return settings;
++}
++
++// Sets the settings found in `dict` on the running profile. Only settings
++// that Chromium itself marks as fit to carry from one installation to another
++// (the ones it would sync) are taken; state such as the list of installed
++// extensions is left alone.
++void ApplySyncableSettings(PrefService* prefs,
++                           const base::DictValue& dict,
++                           const std::string& prefix,
++                           int depth) {
++  constexpr uint32_t kSyncable =
++      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF |
++      user_prefs::PrefRegistrySyncable::SYNCABLE_PRIORITY_PREF;
++  for (const auto item : dict) {
++    const std::string path =
++        prefix.empty() ? item.first : prefix + "." + item.first;
++    const PrefService::Preference* pref = prefs->FindPreference(path);
++    if (pref) {
++      if ((pref->registration_flags() & kSyncable) != 0 &&
++          pref->IsUserModifiable() && pref->GetType() == item.second.type()) {
++        prefs->Set(path, item.second);
++      }
++      continue;
++    }
++    if (item.second.is_dict() && depth < 16) {
++      ApplySyncableSettings(prefs, item.second.GetDict(), path, depth + 1);
++    }
++  }
++}
++
++void ApplySettingsFromFile(base::WeakPtr<Profile> profile,
++                           SettingsFromFile settings) {
++  if (!profile) {
++    return;
++  }
++  PrefService* prefs = profile->GetPrefs();
++  if (settings.preferences) {
++    ApplySyncableSettings(prefs, *settings.preferences, std::string(), 0);
++  }
++  if (settings.secure_preferences) {
++    ApplySyncableSettings(prefs, *settings.secure_preferences, std::string(),
++                          0);
++  }
++}
++
++void ImportSettings(Profile* profile, const base::FilePath& from_profile_dir) {
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++      base::BindOnce(&ReadSettingsFromFile, from_profile_dir),
++      base::BindOnce(&ApplySettingsFromFile, profile->GetWeakPtr()));
++}
++
++// Shows a file dialog for a settings file and reports the chosen path, or an
++// empty path if the user cancelled. Deletes itself afterwards.
++class FilePicker : public ui::SelectFileDialog::Listener {
++ public:
++  using Callback = base::OnceCallback<void(const base::FilePath&)>;
++
++  static void Show(bool save, gfx::NativeWindow owner, Callback callback) {
++    FilePicker* picker = new FilePicker(std::move(callback));
++    picker->dialog_ = ui::SelectFileDialog::Create(picker, nullptr);
++    ui::SelectFileDialog::FileTypeInfo::FileExtensionList extensions;
++    extensions.push_back(FILE_PATH_LITERAL("zip"));
++    ui::SelectFileDialog::FileTypeInfo file_types(extensions);
++    picker->dialog_->SelectFile(
++        save ? ui::SelectFileDialog::SELECT_SAVEAS_FILE
++             : ui::SelectFileDialog::SELECT_OPEN_FILE,
++        save ? u"Export Yatesium settings" : u"Import Yatesium settings",
++        save ? base::FilePath(FILE_PATH_LITERAL("Yatesium-settings.zip"))
++             : base::FilePath(),
++        &file_types, 1, FILE_PATH_LITERAL("zip"), owner);
++  }
++
++  FilePicker(const FilePicker&) = delete;
++  FilePicker& operator=(const FilePicker&) = delete;
++  ~FilePicker() override = default;
++
++  // ui::SelectFileDialog::Listener:
++  void FileSelected(const ui::SelectedFileInfo& file, int index) override {
++    Finish(file.file_path);
++  }
++  void FileSelectionCanceled() override { Finish(base::FilePath()); }
++
++ private:
++  explicit FilePicker(Callback callback) : callback_(std::move(callback)) {}
++
++  void Finish(const base::FilePath& path) {
++    if (callback_) {
++      std::move(callback_).Run(path);
++    }
++    base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
++                                                               this);
++  }
++
++  Callback callback_;
++  scoped_refptr<ui::SelectFileDialog> dialog_;
++};
++
++// ---------------------------------------------------------------------------
 +// The page.
 +
 +bool IsAppInstalledHere(Profile* profile, const std::string& app_id) {
@@ -900,12 +1193,25 @@ index 000000000..e40175562
 +
 +std::string PageStart() {
 +  return "<!doctype html><html><head><meta charset=\"utf-8\">"
-+         "<title>Import from another browser</title></head><body>"
-+         "<h1>Import from another browser</h1>";
++         "<title>Import and export</title></head><body>"
++         "<h1>Import and export</h1>";
 +}
 +
 +std::string PageEnd() {
 +  return "</body></html>";
++}
++
++std::string BuildMessagePage(const std::string& message) {
++  return PageStart() + "<p>" + Escape(message) +
++         "</p><p><a href=\"./\">Back to the list</a></p>" + PageEnd();
++}
++
++// Makes a new token for the links and forms of the page being built. The
++// token is valid for one action.
++const std::string& NewToken() {
++  ScanState& state = GetScanState();
++  state.token = base::UnguessableToken::Create().ToString();
++  return state.token;
 +}
 +
 +// `label` is HTML and must already be escaped.
@@ -918,13 +1224,92 @@ index 000000000..e40175562
 +         "> " + label + "</label>";
 +}
 +
-+// The page is one form per browser profile. Each bookmark set, web app and
-+// extension has a checkbox; "Import selected" sends the form to "run".
++// Returns the form with a checkbox for each thing of `source` that is not
++// here yet, or an empty string if there is nothing. `source_id` goes back to
++// the page in the "p" field and tells which source the form is for.
++std::string BuildSourceForm(Profile* profile,
++                            const SourceProfile& source,
++                            const std::string& source_id,
++                            bool offer_settings) {
++  std::string items;
++
++  if (offer_settings) {
++    items += "<h3>Settings</h3><p>" +
++             Checkbox("s", "1", /*checked=*/true,
++                      "Browser settings. Settings in the file replace the "
++                      "current ones where they differ.") +
++             "</p>";
++  }
++
++  if (source.bookmark_count > 0) {
++    items += "<h3>Bookmarks</h3><p>" +
++             Checkbox("b", "1", /*checked=*/true,
++                      base::NumberToString(source.bookmark_count) +
++                          " bookmarks") +
++             "</p>";
++  }
++
++  std::string app_items;
++  for (const AppEntry& app : source.apps) {
++    if (IsAppInstalledHere(profile, app.app_id)) {
++      continue;
++    }
++    app_items += "<li>" +
++                 Checkbox("a", app.app_id, /*checked=*/true,
++                          Escape(app.name) + " (" +
++                              Escape(app.start_url.GetHost()) + ")") +
++                 "</li>";
++  }
++  if (!app_items.empty()) {
++    items += "<h3>Web apps</h3><ul>" + app_items + "</ul>";
++  }
++
++  std::string extension_items;
++  for (const ExtensionEntry& extension : source.extensions) {
++    if (IsExtensionInstalledHere(profile, extension.id)) {
++      continue;
++    }
++    extension_items +=
++        "<li>" +
++        Checkbox("e", extension.id, /*checked=*/false,
++                 Escape(extension.name) + " " + Escape(extension.version)) +
++        "</li>";
++  }
++  if (!extension_items.empty()) {
++    items += "<h3>Extensions</h3><ul>" + extension_items + "</ul>";
++  }
++
++  if (items.empty()) {
++    return std::string();
++  }
++  return "<form action=\"run\" method=\"get\">"
++         "<input type=\"hidden\" name=\"t\" value=\"" +
++         Escape(GetScanState().token) +
++         "\"><input type=\"hidden\" name=\"p\" value=\"" + Escape(source_id) +
++         "\">" + items +
++         "<p><button type=\"submit\">Import selected</button></p></form>";
++}
++
++// The main page: the settings file actions, then one form per profile of
++// another browser.
 +std::string BuildListPage(Profile* profile) {
 +  ScanState& state = GetScanState();
++  const std::string token = NewToken();
 +  std::string html = PageStart();
 +  html +=
-+      "<p>This page lists what was found in other Chromium-based browsers of "
++      "<h2>Settings file</h2>"
++      "<p>A settings file holds this browser's bookmarks, web apps, settings "
++      "and extensions with their data. Use it as a backup or to set up "
++      "another copy of Yatesium. It does not hold history, saved passwords "
++      "or sign-ins.</p>"
++      "<p><a href=\"export?t=" +
++      Escape(token) +
++      "\">Export to a settings file...</a></p>"
++      "<p><a href=\"open?t=" +
++      Escape(token) +
++      "\">Import from a settings file...</a></p>"
++      "<hr><h2>Other browsers</h2>"
++      "<p>This part lists what was found in other Chromium-based browsers of "
 +      "your Windows account. Tick what you want and click \"Import "
 +      "selected\". Nothing is imported before that.</p>"
 +      "<ul>"
@@ -937,70 +1322,63 @@ index 000000000..e40175562
 +      "the ones you want.</li>"
 +      "</ul>";
 +  if (state.profiles.empty()) {
-+    html += "<p><b>Nothing to import was found.</b></p>";
++    html += "<p><b>No other browser with something to import was "
++            "found.</b></p>";
 +  }
 +  for (size_t index = 0; index < state.profiles.size(); ++index) {
 +    const SourceProfile& source = state.profiles[index];
-+    std::string items;
-+
-+    if (source.bookmark_count > 0) {
-+      items += "<h3>Bookmarks</h3><p>" +
-+               Checkbox("b", "1", /*checked=*/true,
-+                        base::NumberToString(source.bookmark_count) +
-+                            " bookmarks") +
-+               "</p>";
-+    }
-+
-+    std::string app_items;
-+    for (const AppEntry& app : source.apps) {
-+      if (IsAppInstalledHere(profile, app.app_id)) {
-+        continue;
-+      }
-+      app_items += "<li>" +
-+                   Checkbox("a", app.app_id, /*checked=*/true,
-+                            Escape(app.name) + " (" +
-+                                Escape(app.start_url.GetHost()) + ")") +
-+                   "</li>";
-+    }
-+    if (!app_items.empty()) {
-+      items += "<h3>Web apps</h3><ul>" + app_items + "</ul>";
-+    }
-+
-+    std::string extension_items;
-+    for (const ExtensionEntry& extension : source.extensions) {
-+      if (IsExtensionInstalledHere(profile, extension.id)) {
-+        continue;
-+      }
-+      extension_items +=
-+          "<li>" +
-+          Checkbox("e", extension.id, /*checked=*/false,
-+                   Escape(extension.name) + " " + Escape(extension.version)) +
-+          "</li>";
-+    }
-+    if (!extension_items.empty()) {
-+      items += "<h3>Extensions</h3><ul>" + extension_items + "</ul>";
-+    }
-+
-+    html += "<hr><h2>" + Escape(source.browser) + " (" +
-+            Escape(source.profile_name) + ")</h2>";
-+    if (items.empty()) {
-+      html += "<p>Everything from this profile is already here.</p>";
-+      continue;
-+    }
-+    html += "<form action=\"run\" method=\"get\">"
-+            "<input type=\"hidden\" name=\"t\" value=\"" +
-+            Escape(state.token) +
-+            "\"><input type=\"hidden\" name=\"p\" value=\"" +
-+            base::NumberToString(index) + "\">" + items +
-+            "<p><button type=\"submit\">Import selected</button></p></form>";
++    html += "<hr><h3>" + Escape(source.browser) + " (" +
++            Escape(source.profile_name) + ")</h3>";
++    const std::string form =
++        BuildSourceForm(profile, source, base::NumberToString(index),
++                        /*offer_settings=*/false);
++    html += form.empty() ? "<p>Everything from this profile is already here.</p>"
++                         : form;
 +  }
 +  html += PageEnd();
 +  return html;
 +}
 +
-+std::string BuildMessagePage(const std::string& message) {
-+  return PageStart() + "<p>" + Escape(message) +
-+         "</p><p><a href=\"./\">Back to the list</a></p>" + PageEnd();
++// The page for a settings file that was just opened: replace everything, or
++// add chosen things.
++std::string BuildFilePage(Profile* profile) {
++  ScanState& state = GetScanState();
++  if (!state.file) {
++    return BuildMessagePage("No settings file is open.");
++  }
++  const std::string token = NewToken();
++  const SourceProfile& source = *state.file;
++  std::string html = PageStart();
++  html += "<h2>Settings file: " + Escape(source.profile_name) + "</h2>";
++  html += "<p>It holds " + base::NumberToString(source.bookmark_count) +
++          " bookmarks, " + base::NumberToString(source.apps.size()) +
++          " web apps and " + base::NumberToString(source.extensions.size()) +
++          " extensions" +
++          (state.file_has_settings ? ", and browser settings." : ".") + "</p>";
++
++  html +=
++      "<hr><h3>Replace everything</h3>"
++      "<p>Makes this browser match the file: bookmarks, settings, web apps, "
++      "and extensions with their data. What is here now in those areas is "
++      "overwritten, including bookmarks, web apps and extensions that the "
++      "file does not have. History, saved passwords and sign-ins are kept. "
++      "The browser closes and starts again.</p>"
++      "<form action=\"restore\" method=\"get\">"
++      "<input type=\"hidden\" name=\"t\" value=\"" +
++      Escape(token) +
++      "\"><p><button type=\"submit\">Replace everything and relaunch"
++      "</button></p></form>";
++
++  html += "<hr><h3>Add to this browser</h3>"
++          "<p>Adds what you tick to what is already here. Things that are "
++          "already here are not listed. An extension brings its stored data "
++          "along if this browser has none for it.</p>";
++  const std::string form =
++      BuildSourceForm(profile, source, "file", state.file_has_settings);
++  html += form.empty() ? "<p>Everything in the file is already here.</p>" : form;
++  html += "<p><a href=\"./\">Back to the list</a></p>";
++  html += PageEnd();
++  return html;
 +}
 +
 +bool Contains(const std::vector<std::string>& list, const std::string& item) {
@@ -1012,73 +1390,112 @@ index 000000000..e40175562
 +  return false;
 +}
 +
-+// Carries out the import that the submitted form asked for and returns the
++// Checks the token of a link or form and uses it up, so that reloading the
++// resulting page does nothing a second time.
++bool ConsumeToken(const GURL& url) {
++  std::string token;
++  for (net::QueryIterator it(url); !it.IsAtEnd(); it.Advance()) {
++    if (it.GetKey() == "t") {
++      token = it.GetUnescapedValue();
++    }
++  }
++  ScanState& state = GetScanState();
++  if (state.token.empty() || token != state.token) {
++    return false;
++  }
++  state.token.clear();
++  return true;
++}
++
++constexpr char kExpiredMessage[] =
++    "This page is no longer valid. Nothing was changed.";
++
++// Carries out the import that a submitted form asked for and returns the
 +// page to show.
 +std::string RunImport(Profile* profile, const GURL& url) {
-+  std::string token;
-+  int profile_index = -1;
++  std::string source_id;
++  bool settings_ticked = false;
 +  bool bookmarks_ticked = false;
 +  std::vector<std::string> app_ids;
 +  std::vector<std::string> extension_ids;
 +  for (net::QueryIterator it(url); !it.IsAtEnd(); it.Advance()) {
 +    const std::string_view key = it.GetKey();
 +    const std::string value = it.GetUnescapedValue();
-+    if (key == "t") {
-+      token = value;
++    if (key == "p") {
++      source_id = value;
++    } else if (key == "s") {
++      settings_ticked = true;
 +    } else if (key == "b") {
 +      bookmarks_ticked = true;
 +    } else if (key == "a") {
 +      app_ids.push_back(value);
 +    } else if (key == "e") {
 +      extension_ids.push_back(value);
-+    } else if (key == "p") {
-+      if (!base::StringToInt(value, &profile_index)) {
-+        profile_index = -1;
-+      }
 +    }
 +  }
 +
-+  ScanState& state = GetScanState();
-+  if (state.token.empty() || token != state.token || profile_index < 0 ||
-+      static_cast<size_t>(profile_index) >= state.profiles.size()) {
-+    return BuildMessagePage(
-+        "This page is no longer valid. Nothing was imported.");
++  if (!ConsumeToken(url)) {
++    return BuildMessagePage(kExpiredMessage);
 +  }
-+  // One use per token, so that reloading this page imports nothing twice.
-+  state.token.clear();
-+  const SourceProfile& source = state.profiles[profile_index];
++  ScanState& state = GetScanState();
++  const SourceProfile* source = nullptr;
++  if (source_id == "file") {
++    if (state.file) {
++      source = &*state.file;
++    }
++  } else {
++    int index = -1;
++    if (base::StringToInt(source_id, &index) && index >= 0 &&
++        static_cast<size_t>(index) < state.profiles.size()) {
++      source = &state.profiles[index];
++    }
++  }
++  if (!source) {
++    return BuildMessagePage(kExpiredMessage);
++  }
 +
-+  const bool bookmarks = bookmarks_ticked && source.bookmark_count > 0;
++  const bool settings = settings_ticked && source->from_settings_file &&
++                        state.file_has_settings;
++  const bool bookmarks = bookmarks_ticked && source->bookmark_count > 0;
 +  std::vector<AppEntry> apps;
 +  std::vector<ExtensionEntry> extensions;
-+  for (const AppEntry& app : source.apps) {
++  for (const AppEntry& app : source->apps) {
 +    if (Contains(app_ids, app.app_id) &&
 +        !IsAppInstalledHere(profile, app.app_id)) {
 +      apps.push_back(app);
 +    }
 +  }
-+  for (const ExtensionEntry& extension : source.extensions) {
++  for (const ExtensionEntry& extension : source->extensions) {
 +    if (Contains(extension_ids, extension.id) &&
 +        !IsExtensionInstalledHere(profile, extension.id)) {
 +      extensions.push_back(extension);
 +    }
 +  }
 +
-+  if (!bookmarks && apps.empty() && extensions.empty()) {
++  if (!settings && !bookmarks && apps.empty() && extensions.empty()) {
 +    return BuildMessagePage("Nothing was selected. Nothing was imported.");
 +  }
 +
-+  if (bookmarks) {
-+    ImportBookmarks(profile, source);
++  if (settings) {
++    ImportSettings(profile, source->profile_dir);
 +  }
-+  ImportApps(profile, source, apps);
++  if (bookmarks) {
++    ImportBookmarks(profile, *source);
++  }
++  ImportApps(profile, *source, apps);
 +  for (const ExtensionEntry& extension : extensions) {
-+    ImportExtension(profile, extension);
++    // Only a settings file brings the extensions' stored data.
++    ImportExtension(profile, extension,
++                    source->from_settings_file ? source->profile_dir
++                                               : base::FilePath());
 +  }
 +
-+  std::string message = "Importing from " + source.browser + " (" +
-+                        source.profile_name + "): ";
-+  message += bookmarks ? base::NumberToString(source.bookmark_count) : "0";
++  std::string message = "Importing from " + source->browser + " (" +
++                        source->profile_name + "): ";
++  if (settings) {
++    message += "settings, ";
++  }
++  message += bookmarks ? base::NumberToString(source->bookmark_count) : "0";
 +  message += " bookmarks, " + base::NumberToString(apps.size()) +
 +             " web apps, " + base::NumberToString(extensions.size()) +
 +             " extensions. This takes a moment. Web apps and extensions "
@@ -1098,10 +1515,114 @@ index 000000000..e40175562
 +    Respond(std::move(callback), std::string());
 +    return;
 +  }
-+  ScanState& state = GetScanState();
-+  state.profiles = std::move(profiles);
-+  state.token = base::UnguessableToken::Create().ToString();
++  GetScanState().profiles = std::move(profiles);
 +  Respond(std::move(callback), BuildListPage(profile.get()));
++}
++
++// Export: ask where to save, write pending settings to disk, build the zip.
++
++void OnExportDone(const base::FilePath& path,
++                  content::URLDataSource::GotDataCallback callback,
++                  bool ok) {
++  Respond(std::move(callback),
++          BuildMessagePage(ok ? "The settings file was saved as " +
++                                    path.AsUTF8Unsafe() + "."
++                              : "The settings file could not be written."));
++}
++
++void RunExport(const base::FilePath& profile_dir,
++               const base::FilePath& path,
++               content::URLDataSource::GotDataCallback callback) {
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++      base::BindOnce(&ExportSettings, profile_dir, path),
++      base::BindOnce(&OnExportDone, path, std::move(callback)));
++}
++
++void OnExportPathChosen(base::WeakPtr<Profile> profile,
++                        content::URLDataSource::GotDataCallback callback,
++                        const base::FilePath& path) {
++  if (!profile || path.empty()) {
++    Respond(std::move(callback), BuildMessagePage("Nothing was exported."));
++    return;
++  }
++  // The settings on disk can be a little behind. Write them out first.
++  profile->GetPrefs()->CommitPendingWrite(base::BindOnce(
++      &RunExport, profile->GetPath(), path, std::move(callback)));
++}
++
++// Import from a file: ask which file, unpack it, show what it holds.
++
++void OnFileOpened(base::WeakPtr<Profile> profile,
++                  content::URLDataSource::GotDataCallback callback,
++                  OpenedFile opened) {
++  if (!profile || !opened.ok) {
++    Respond(std::move(callback),
++            BuildMessagePage("This is not a Yatesium settings file, or it "
++                             "could not be read. Nothing was changed."));
++    return;
++  }
++  ScanState& state = GetScanState();
++  if (!state.file_temp_dir.empty()) {
++    base::ThreadPool::PostTask(
++        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
++        base::GetDeletePathRecursivelyCallback(state.file_temp_dir));
++  }
++  state.file = std::move(opened.source);
++  state.file_temp_dir = opened.temp_dir;
++  state.file_has_settings = opened.has_settings;
++  Respond(std::move(callback), BuildFilePage(profile.get()));
++}
++
++void OnImportPathChosen(base::WeakPtr<Profile> profile,
++                        content::URLDataSource::GotDataCallback callback,
++                        const base::FilePath& path) {
++  if (!profile || path.empty()) {
++    Respond(std::move(callback), BuildMessagePage("No file was chosen."));
++    return;
++  }
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++      base::BindOnce(&OpenSettingsFile, path),
++      base::BindOnce(&OnFileOpened, profile, std::move(callback)));
++}
++
++// Replace everything: stage the unpacked file in the profile and relaunch.
++
++void OnRestoreStaged(content::URLDataSource::GotDataCallback callback,
++                     bool ok) {
++  if (!ok) {
++    Respond(std::move(callback),
++            BuildMessagePage("The settings file could not be prepared. "
++                             "Nothing was changed."));
++    return;
++  }
++  Respond(std::move(callback),
++          BuildMessagePage("The browser is starting again with the settings "
++                           "from the file."));
++  chrome::AttemptRestart();
++}
++
++void StartRestore(Profile* profile,
++                  content::URLDataSource::GotDataCallback callback) {
++  ScanState& state = GetScanState();
++  if (!state.file) {
++    Respond(std::move(callback), BuildMessagePage(kExpiredMessage));
++    return;
++  }
++  const base::FilePath unpacked = state.file->profile_dir;
++  // The unpacked files are moved away, so the file is no longer open here.
++  state.file.reset();
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
++      base::BindOnce(&StageRestore, unpacked, profile->GetPath()),
++      base::BindOnce(&OnRestoreStaged, std::move(callback)));
 +}
 +
 +class ImportSource : public content::URLDataSource {
@@ -1122,8 +1643,33 @@ index 000000000..e40175562
 +      Respond(std::move(callback), std::string());
 +      return;
 +    }
-+    if (url.path() == "/run") {
++    const std::string path(url.path());
++    if (path == "/run") {
 +      Respond(std::move(callback), RunImport(profile_.get(), url));
++      return;
++    }
++    if (path == "/export" || path == "/open" || path == "/restore") {
++      if (!ConsumeToken(url)) {
++        Respond(std::move(callback), BuildMessagePage(kExpiredMessage));
++        return;
++      }
++      if (path == "/restore") {
++        StartRestore(profile_.get(), std::move(callback));
++        return;
++      }
++      content::WebContents* web_contents = wc_getter.Run();
++      const gfx::NativeWindow owner =
++          web_contents ? web_contents->GetTopLevelNativeWindow()
++                       : gfx::NativeWindow();
++      if (path == "/export") {
++        FilePicker::Show(/*save=*/true, owner,
++                         base::BindOnce(&OnExportPathChosen, profile_,
++                                        std::move(callback)));
++      } else {
++        FilePicker::Show(/*save=*/false, owner,
++                         base::BindOnce(&OnImportPathChosen, profile_,
++                                        std::move(callback)));
++      }
 +      return;
 +    }
 +    base::ThreadPool::PostTaskAndReplyWithResult(
@@ -1157,6 +1703,28 @@ index 000000000..e40175562
 +  return false;
 +}
 +
++void ApplyPendingRestore(const base::FilePath& user_data_dir) {
++  std::vector<base::FilePath> profile_dirs;
++  {
++    base::FileEnumerator dirs(user_data_dir, /*recursive=*/false,
++                              base::FileEnumerator::DIRECTORIES);
++    for (base::FilePath dir = dirs.Next(); !dir.empty(); dir = dirs.Next()) {
++      profile_dirs.push_back(dir);
++    }
++  }
++  for (const base::FilePath& profile_dir : profile_dirs) {
++    const base::FilePath restore_dir = profile_dir.AppendASCII(kRestoreDirName);
++    if (!base::PathExists(restore_dir.AppendASCII(kRestoreReadyFile))) {
++      continue;
++    }
++    const base::FilePath source = restore_dir.AppendASCII(kSettingsProfileDir);
++    if (base::DirectoryExists(source)) {
++      RestoreProfile(profile_dir, source);
++    }
++    base::DeletePathRecursively(restore_dir);
++  }
++}
++
 +ImportUI::ImportUI(content::WebUI* web_ui) : WebUIController(web_ui) {
 +  // Not offered in incognito and guest windows: the import changes the
 +  // regular profile.
@@ -1173,20 +1741,24 @@ index 000000000..e40175562
 +}  // namespace yatesium
 diff --git a/chrome/browser/yatesium_import.h b/chrome/browser/yatesium_import.h
 new file mode 100644
-index 000000000..86ec9ae06
+index 000000000..8a61624b8
 --- /dev/null
 +++ b/chrome/browser/yatesium_import.h
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,53 @@
 +// Yatesium: the import page (yatesium://import, chrome://import).
 +//
 +// The page lists the bookmarks, web apps and extensions found in other
 +// Chromium-based browsers of the same Windows account and imports what the
 +// user clicks. Nothing is read from another browser until the page is opened,
 +// and nothing is imported without a click.
++//
++// The page also exports this profile's bookmarks, settings, web apps and
++// extensions to a settings file, and imports from such a file.
 +
 +#ifndef CHROME_BROWSER_YATESIUM_IMPORT_H_
 +#define CHROME_BROWSER_YATESIUM_IMPORT_H_
 +
++#include "base/files/file_path.h"
 +#include "content/public/browser/web_ui_controller.h"
 +#include "content/public/browser/webui_config.h"
 +
@@ -1203,6 +1775,12 @@ index 000000000..86ec9ae06
 +// current Windows account. Used to decide whether the first run opens the
 +// import page. Only checks whether the folders exist.
 +bool OtherBrowserDataExists();
++
++// Carries out a "replace everything" import that the page prepared before the
++// browser was relaunched: the profile's bookmarks, settings, web apps and
++// extensions are replaced by the ones from the settings file. Must run at
++// startup before any profile is loaded. Does nothing if nothing is pending.
++void ApplyPendingRestore(const base::FilePath& user_data_dir);
 +
 +class ImportUI : public content::WebUIController {
 + public:
