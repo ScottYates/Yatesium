@@ -77,13 +77,14 @@ index d79e9dfdb..57d21b5ee 100644
    map.AddWebUIConfig(std::make_unique<FamilyLinkUserInternalsUIConfig>());
 diff --git a/chrome/browser/yatesium_import.cc b/chrome/browser/yatesium_import.cc
 new file mode 100644
-index 000000000..19a55453f
+index 000000000..8541525dc
 --- /dev/null
 +++ b/chrome/browser/yatesium_import.cc
-@@ -0,0 +1,2161 @@
+@@ -0,0 +1,2229 @@
 +// Yatesium: the import page. See yatesium_import.h.
 +//
-+// How the page works: it is plain HTML built here, with no script. Each
++// How the page works: it is HTML built here. Only the export progress page
++// uses a script. Each
 +// browser profile is a form with checkboxes. Submitting it loads "run?..."
 +// on this page, with a token that is valid once. The list of what was found
 +// is kept from the last time the page was shown, and the form refers to
@@ -1118,7 +1119,7 @@ index 000000000..19a55453f
 +  params.dest_file = dest_file;
 +  params.recursive = true;
 +  params.include_hidden_files = true;
-+  params.progress_period = base::Milliseconds(250);
++  params.progress_period = base::Milliseconds(100);
 +  params.progress_callback = base::BindRepeating(
 +      [](int64_t total, const zip::Progress& progress) {
 +        if (total > 0) {
@@ -1595,13 +1596,60 @@ index 000000000..19a55453f
 +.percent { color: var(--muted); font-variant-numeric: tabular-nums; }
 +)css";
 +
-+// `head_extra` is added to the page's head, for the progress page's refresh.
-+std::string PageStart(const std::string& head_extra = std::string()) {
++// The script of the progress page, served as "progress.js". It asks for
++// "progress.json" a few times a second and moves the bar. When the export is
++// no longer running it loads the progress page again, which then shows the
++// result. It only sets a number and a text, so it needs no special rights.
++constexpr char kProgressScript[] = R"js(
++(function() {
++  const bar = document.getElementById('bar');
++  const percent = document.getElementById('percent');
++  async function poll() {
++    let data = null;
++    try {
++      const response = await fetch('progress.json', {cache: 'no-store'});
++      data = await response.json();
++    } catch (error) {
++      setTimeout(poll, 1000);
++      return;
++    }
++    if (data.phase !== 'running') {
++      location.replace('progress');
++      return;
++    }
++    bar.value = data.percent;
++    percent.textContent = data.percent + ' %';
++    setTimeout(poll, 200);
++  }
++  poll();
++})();
++)js";
++
++// What "progress.json" answers.
++std::string BuildProgressJson() {
++  const char* phase = "none";
++  switch (GetScanState().export_phase) {
++    case ExportPhase::kRunning:
++      phase = "running";
++      break;
++    case ExportPhase::kDone:
++      phase = "done";
++      break;
++    case ExportPhase::kFailed:
++      phase = "failed";
++      break;
++    case ExportPhase::kNone:
++      break;
++  }
++  return std::string("{\"phase\":\"") + phase + "\",\"percent\":" +
++         base::NumberToString(g_export_percent.load()) + "}";
++}
++
++std::string PageStart() {
 +  return "<!doctype html><html><head><meta charset=\"utf-8\">"
 +         "<meta name=\"color-scheme\" content=\"light dark\">"
 +         "<title>Import and export</title>"
-+         "<link rel=\"stylesheet\" href=\"style.css\">" +
-+         head_extra +
++         "<link rel=\"stylesheet\" href=\"style.css\">"
 +         "</head><body><main><h1>Import and export</h1>";
 +}
 +
@@ -1619,22 +1667,24 @@ index 000000000..19a55453f
 +         "</p>" + BackButton() + "</section>" + PageEnd();
 +}
 +
-+// The page shown while a settings file is being written. It loads itself
-+// again every second until the export has finished.
++// The page shown while a settings file is being written. Its script keeps
++// the bar moving and loads this page again when the export has finished.
 +std::string BuildProgressPage() {
 +  ScanState& state = GetScanState();
 +  switch (state.export_phase) {
 +    case ExportPhase::kRunning: {
 +      const std::string percent =
 +          base::NumberToString(g_export_percent.load());
-+      return PageStart("<meta http-equiv=\"refresh\" "
-+                       "content=\"1;url=progress\">") +
++      return PageStart() +
 +             "<section class=\"card\"><h2>Exporting settings</h2>"
 +             "<p>Writing " +
 +             Escape(state.export_path) +
-+             "</p><progress max=\"100\" value=\"" + percent +
-+             "\"></progress><p class=\"percent\">" + percent +
-+             " %</p></section>" + PageEnd();
++             "</p><progress id=\"bar\" max=\"100\" value=\"" + percent +
++             "\"></progress><p class=\"percent\" id=\"percent\">" + percent +
++             " %</p><p class=\"muted\">If the bar does not move, "
++             "<a href=\"progress\">refresh this page</a>.</p></section>"
++             "<script src=\"progress.js\"></script>" +
++             PageEnd();
 +    }
 +    case ExportPhase::kDone:
 +      return PageStart() +
@@ -2145,6 +2195,14 @@ index 000000000..19a55453f
 +      Respond(std::move(callback), BuildProgressPage());
 +      return;
 +    }
++    if (path == "/progress.js") {
++      Respond(std::move(callback), kProgressScript);
++      return;
++    }
++    if (path == "/progress.json") {
++      Respond(std::move(callback), BuildProgressJson());
++      return;
++    }
 +    if (path == "/run") {
 +      Respond(std::move(callback), RunImport(profile_.get(), url));
 +      return;
@@ -2182,7 +2240,17 @@ index 000000000..19a55453f
 +  }
 +
 +  std::string GetMimeType(const GURL& url) override {
-+    return url.path() == "/style.css" ? "text/css" : "text/html";
++    const std::string path(url.path());
++    if (path == "/style.css") {
++      return "text/css";
++    }
++    if (path == "/progress.js") {
++      return "text/javascript";
++    }
++    if (path == "/progress.json") {
++      return "application/json";
++    }
++    return "text/html";
 +  }
 +
 +  bool AllowCaching() override { return false; }
