@@ -77,10 +77,10 @@ index d79e9dfdb..57d21b5ee 100644
    map.AddWebUIConfig(std::make_unique<FamilyLinkUserInternalsUIConfig>());
 diff --git a/chrome/browser/yatesium_import.cc b/chrome/browser/yatesium_import.cc
 new file mode 100644
-index 000000000..8541525dc
+index 000000000..e8fa4a9c3
 --- /dev/null
 +++ b/chrome/browser/yatesium_import.cc
-@@ -0,0 +1,2229 @@
+@@ -0,0 +1,2257 @@
 +// Yatesium: the import page. See yatesium_import.h.
 +//
 +// How the page works: it is HTML built here. Only the export progress page
@@ -1600,26 +1600,54 @@ index 000000000..8541525dc
 +// "progress.json" a few times a second and moves the bar. When the export is
 +// no longer running it loads the progress page again, which then shows the
 +// result. It only sets a number and a text, so it needs no special rights.
++//
++// It uses XMLHttpRequest: pages on the browser's own address may not use
++// fetch(). If the request does not work either, the page falls back to
++// loading itself again once a second.
 +constexpr char kProgressScript[] = R"js(
 +(function() {
 +  const bar = document.getElementById('bar');
 +  const percent = document.getElementById('percent');
-+  async function poll() {
-+    let data = null;
++  let failures = 0;
++  function reloadPage() {
++    location.replace('progress');
++  }
++  function retry() {
++    failures += 1;
++    if (failures >= 3) {
++      setTimeout(reloadPage, 1000);
++    } else {
++      setTimeout(poll, 300);
++    }
++  }
++  function poll() {
++    const request = new XMLHttpRequest();
++    request.open('GET', 'progress.json?n=' + Date.now());
++    request.onload = function() {
++      let data = null;
++      try {
++        data = JSON.parse(request.responseText);
++      } catch (error) {
++        retry();
++        return;
++      }
++      failures = 0;
++      if (data.phase !== 'running') {
++        reloadPage();
++        return;
++      }
++      bar.value = data.percent;
++      percent.textContent = data.percent + ' %';
++      setTimeout(poll, 200);
++    };
++    request.onerror = retry;
++    request.ontimeout = retry;
++    request.timeout = 5000;
 +    try {
-+      const response = await fetch('progress.json', {cache: 'no-store'});
-+      data = await response.json();
++      request.send();
 +    } catch (error) {
-+      setTimeout(poll, 1000);
-+      return;
++      retry();
 +    }
-+    if (data.phase !== 'running') {
-+      location.replace('progress');
-+      return;
-+    }
-+    bar.value = data.percent;
-+    percent.textContent = data.percent + ' %';
-+    setTimeout(poll, 200);
 +  }
 +  poll();
 +})();

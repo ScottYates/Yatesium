@@ -1,0 +1,56 @@
+diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html b/chrome/browser/resources/settings/settings_menu/settings_menu.html
+index c35c985dd..ca97d5e66 100644
+--- a/chrome/browser/resources/settings/settings_menu/settings_menu.html
++++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html
+@@ -1,5 +1,5 @@
+     <div role="navigation">
+-      <cr-menu-selector id="menu" selectable="a:not(#extensionsLink)"
++      <cr-menu-selector id="menu" selectable="a:not(#extensionsLink):not(#importLink)"
+           attr-for-selected="href" @iron-activate="${this.onIronActivate_}"
+           @click="${this.onLinkClick_}" selected-attribute="selected">
+         <a role="menuitem"
+@@ -121,6 +121,14 @@
+           <div class="cr-icon icon-external"></div>
+           <cr-ripple></cr-ripple>
+         </a>
++        <a role="menuitem" id="importLink" class="cr-nav-menu-item"
++            href="chrome://import" target="_blank"
++            title="$i18n{yatesiumImportTooltip}">
++          <cr-icon icon="cr:sync"></cr-icon>
++          <span class="menu-label">$i18n{yatesiumImportTitle}</span>
++          <div class="cr-icon icon-external"></div>
++          <cr-ripple></cr-ripple>
++        </a>
+         <a role="menuitem" id="about-menu" href="/help"
+             class="cr-nav-menu-item">
+           <cr-icon icon="cr:chrome-product"></cr-icon>
+diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.ts b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
+index 931eefe24..f82af5a78 100644
+--- a/chrome/browser/resources/settings/settings_menu/settings_menu.ts
++++ b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
+@@ -133,7 +133,8 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
+    * accessibility purposes, taps are handled separately.
+    */
+   protected onLinkClick_(event: Event) {
+-    if ((event.target as HTMLElement).matches('a:not(#extensionsLink)')) {
++    if ((event.target as HTMLElement)
++            .matches('a:not(#extensionsLink):not(#importLink)')) {
+       event.preventDefault();
+     }
+   }
+diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+index f64a52f56..2c80e83ee 100644
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -4518,6 +4518,11 @@ void AddSystemStrings(content::WebUIDataSource* html_source) {
+ void AddExtensionsStrings(content::WebUIDataSource* html_source) {
+   html_source->AddLocalizedString("extensionsPageTitle",
+                                   IDS_SETTINGS_EXTENSIONS_CHECKBOX_LABEL);
++  // Yatesium: the menu entry that opens the import and export page.
++  html_source->AddString("yatesiumImportTitle", u"Import and export");
++  html_source->AddString(
++      "yatesiumImportTooltip",
++      u"Import from another browser, or export and import a settings file");
+ }
+ 
+ void AddSecurityKeysStrings(content::WebUIDataSource* html_source) {

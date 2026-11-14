@@ -75,6 +75,9 @@ Limits:
 
 ## Importing from another browser
 
+The import and export page is opened from "Import and export" in the menu on
+the left of the settings page, or by typing `yatesium://import`.
+
 `yatesium://import` lists what it finds in other Chromium-based browsers of
 the same Windows account (Brave, Chrome, Edge, Vivaldi, Chromium) and imports
 what you tick. On the first run the page opens by itself if one of those
@@ -408,6 +411,7 @@ only the files they touch are recompiled.
 | `patches/0015` | The import page: other browsers, and export to and import from a settings file |
 | `patches/0016` | No "Uninstall" button in the title bar of web app windows |
 | `patches/0017` | Update check and build information on the About page |
+| `patches/0018` | "Import and export" entry in the settings menu |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |
