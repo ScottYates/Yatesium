@@ -225,10 +225,18 @@ with no window. The updater does this:
 The next start runs the new version. `Data\Update\update.log` records what
 happened.
 
-- To check right away, run `yatesium_update.exe`. It reports in a console
-  window.
+- To check right away, open the About page (`yatesium://settings/help`, or
+  "Help", "About Yatesium" in the menu). It checks as soon as it opens, shows
+  "Checking for updates", the download progress, and then either "Yatesium is
+  up to date" or a "Relaunch" button. "Relaunch" closes the browser, installs
+  the update and starts the browser again with its tabs.
+- The About page also shows the Yatesium build next to the Chromium version:
+  version with revision, the commit it was built from, and the build date.
+- Running `yatesium_update.exe` by hand does the same check and reports in a
+  console window.
 - To turn automatic updates off, create an empty file `Data\no-update.txt`.
-  Deleting `yatesium_update.exe` also works.
+  The About page still checks when you open it. Deleting
+  `yatesium_update.exe` turns both off.
 
 The updater is a small C++ program built with the browser
 (`chrome/yatesium_update` in patch 0013). It uses the Windows API and the zip
@@ -398,6 +406,7 @@ only the files they touch are recompiled.
 | `patches/0014` | Flags for the user's own Google API credentials |
 | `patches/0015` | The import page: other browsers, and export to and import from a settings file |
 | `patches/0016` | No "Uninstall" button in the title bar of web app windows |
+| `patches/0017` | Update check and build information on the About page |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |

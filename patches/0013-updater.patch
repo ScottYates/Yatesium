@@ -99,10 +99,10 @@ index 000000000..7d707c28e
 +}
 diff --git a/chrome/yatesium_update/yatesium_update.cc b/chrome/yatesium_update/yatesium_update.cc
 new file mode 100644
-index 000000000..640dbff26
+index 000000000..42866621b
 --- /dev/null
 +++ b/chrome/yatesium_update/yatesium_update.cc
-@@ -0,0 +1,920 @@
+@@ -0,0 +1,1004 @@
 +// Yatesium updater.
 +//
 +// Looks for a newer Yatesium release on GitHub, downloads the zip, checks its
@@ -112,7 +112,14 @@ index 000000000..640dbff26
 +//   yatesium_update.exe --auto   Started by the browser. Checks at most once
 +//                                a day, shows nothing, and waits for the
 +//                                browser to close before it updates.
++//   yatesium_update.exe --now    Started by the browser's About page. Like
++//                                --auto, but checks right away.
 +//   yatesium_update.exe          Checks now and reports in a console window.
++//
++// Progress is written to Data\Update\state.txt for the About page:
++// "checking", "uptodate <version>", "downloading <version> <percent>",
++// "ready <version>" or "failed <reason>". If the file Data\Update\relaunch
++// exists when the update has been installed, the browser is started again.
 +//
 +// To turn automatic updates off, create an empty file Data\no-update.txt.
 +//
@@ -143,8 +150,12 @@ index 000000000..640dbff26
 +const wchar_t kUserAgent[] = L"Yatesium-Updater";
 +
 +bool g_auto = false;
++// True with --now: no start-up delay and no once-a-day limit.
++bool g_now = false;
 +HANDLE g_console = nullptr;
 +std::wstring g_log_path;
++std::wstring g_state_path;
++std::wstring g_relaunch_path;
 +
 +// ---------------------------------------------------------------------------
 +// Text helpers.
@@ -372,6 +383,13 @@ index 000000000..640dbff26
 +  return ok;
 +}
 +
++// Tells the browser's About page where the update stands.
++void WriteState(const std::wstring& state) {
++  if (!g_state_path.empty()) {
++    WriteSmallFile(g_state_path, ToUtf8(state));
++  }
++}
++
 +// Reads the version from a version.txt file.
 +bool ReadVersionFile(const std::wstring& path, std::wstring* text) {
 +  std::string content;
@@ -461,11 +479,14 @@ index 000000000..640dbff26
 +// Download.
 +
 +// Fetches |url|. The body goes to |file_path| if that is not empty, and
-+// otherwise into |body|, which is limited to |max_body| bytes.
++// otherwise into |body|, which is limited to |max_body| bytes. If
++// |progress_state| is not empty, the download progress is written to the
++// state file as "<progress_state> <percent>".
 +bool HttpGet(const std::wstring& url,
 +             const std::wstring& file_path,
 +             std::string* body,
 +             size_t max_body,
++             const std::wstring& progress_state,
 +             std::wstring* error) {
 +  wchar_t host[256];
 +  wchar_t path[2048];
@@ -539,6 +560,20 @@ index 000000000..640dbff26
 +        break;
 +      }
 +    }
++    unsigned long long total = 0;
++    {
++      wchar_t length_text[32];
++      DWORD length_size = sizeof(length_text);
++      if (WinHttpQueryHeaders(request, WINHTTP_QUERY_CONTENT_LENGTH,
++                              WINHTTP_HEADER_NAME_BY_INDEX, length_text,
++                              &length_size, WINHTTP_NO_HEADER_INDEX)) {
++        for (const wchar_t* c = length_text; *c >= L'0' && *c <= L'9'; ++c) {
++          total = total * 10 + static_cast<unsigned long long>(*c - L'0');
++        }
++      }
++    }
++    unsigned long long received = 0;
++    int last_percent = -1;
 +    std::vector<char> buffer(1 << 16);
 +    bool failed = false;
 +    for (;;) {
@@ -551,6 +586,14 @@ index 000000000..640dbff26
 +      }
 +      if (read == 0) {
 +        break;
++      }
++      received += read;
++      if (!progress_state.empty() && total > 0) {
++        const int percent = static_cast<int>(received * 100 / total);
++        if (percent != last_percent) {
++          last_percent = percent;
++          WriteState(progress_state + L" " + Number(percent));
++        }
 +      }
 +      if (file != INVALID_HANDLE_VALUE) {
 +        DWORD written = 0;
@@ -825,6 +868,31 @@ index 000000000..640dbff26
 +  return L"YatesiumUpdate-" + Number(hash);
 +}
 +
++// If the About page asked for it, starts the browser again once it has
++// closed. The request is the file Data\Update\relaunch.
++void RelaunchBrowserIfAsked(const std::wstring& install_dir) {
++  if (g_relaunch_path.empty() || !PathExists(g_relaunch_path)) {
++    return;
++  }
++  DeleteFileW(g_relaunch_path.c_str());
++  // The browser that asked is on its way out. Give it a minute.
++  for (int i = 0; i < 120 && BrowserRunning(install_dir); ++i) {
++    Sleep(500);
++  }
++  std::wstring command =
++      L"\"" + install_dir + L"\\" + kBrowserExe + L"\" --restore-last-session";
++  STARTUPINFOW startup = {};
++  startup.cb = sizeof(startup);
++  PROCESS_INFORMATION process = {};
++  if (CreateProcessW(nullptr, &command[0], nullptr, nullptr, FALSE, 0, nullptr,
++                     install_dir.c_str(), &startup, &process)) {
++    CloseHandle(process.hThread);
++    CloseHandle(process.hProcess);
++  } else {
++    Say(LastErrorText(L"Could not start the browser again"));
++  }
++}
++
 +// Returns false if something went wrong. Being up to date is not an error.
 +bool Update(const std::wstring& install_dir,
 +            const std::wstring& release_base,
@@ -848,7 +916,7 @@ index 000000000..640dbff26
 +  }
 +
 +  const std::wstring stamp_path = work_dir + L"\\last-check.txt";
-+  if (g_auto) {
++  if (g_auto && !g_now) {
 +    // Let the browser finish starting, then check at most once a day.
 +    Sleep(60000);
 +    double hours = HoursSinceWritten(stamp_path);
@@ -856,11 +924,12 @@ index 000000000..640dbff26
 +      return true;
 +    }
 +  }
++  WriteState(L"checking");
 +
 +  // latest.txt holds one line: "<version> <SHA-256 of the zip>".
 +  std::string latest_body;
 +  if (!HttpGet(release_base + L"/latest/download/" + kLatestFile, std::wstring(),
-+               &latest_body, 4096, error)) {
++               &latest_body, 4096, std::wstring(), error)) {
 +    *error = L"Could not check for a new release. " + *error;
 +    return false;
 +  }
@@ -880,6 +949,7 @@ index 000000000..640dbff26
 +  }
 +  if (!IsNewer(latest, current)) {
 +    Say(L"Yatesium " + current_text + L" is up to date.");
++    WriteState(L"uptodate " + current_text);
 +    return true;
 +  }
 +  if (expected_hash.size() != 64 ||
@@ -903,9 +973,10 @@ index 000000000..640dbff26
 +  if (!PathExists(zip_path) || !Sha256OfFile(zip_path, &actual_hash) ||
 +      actual_hash != expected_hash) {
 +    Say(L"Downloading Yatesium " + latest_text + L"...");
++    WriteState(L"downloading " + latest_text + L" 0");
 +    const std::wstring part_path = zip_path + L".part";
 +    if (!HttpGet(release_base + L"/download/v" + latest_text + L"/" + zip_name,
-+                 part_path, nullptr, 0, error)) {
++                 part_path, nullptr, 0, L"downloading " + latest_text, error)) {
 +      DeleteFileW(part_path.c_str());
 +      *error = L"Could not download the release. " + *error;
 +      return false;
@@ -939,6 +1010,7 @@ index 000000000..640dbff26
 +    return false;
 +  }
 +
++  WriteState(L"ready " + new_text);
 +  if (BrowserRunning(install_dir)) {
 +    Say(L"Yatesium " + new_text +
 +        L" is ready. It will be installed when the browser is closed.");
@@ -951,6 +1023,7 @@ index 000000000..640dbff26
 +    return false;
 +  }
 +  Say(L"Updated Yatesium from " + current_text + L" to " + new_text + L".");
++  DeleteFileW(g_state_path.c_str());
 +
 +  // The old copy of this program is still running and stays behind. The next
 +  // run removes it.
@@ -964,7 +1037,8 @@ index 000000000..640dbff26
 +
 +int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t* command_line, int) {
 +  const std::wstring arguments = command_line ? command_line : L"";
-+  g_auto = arguments.find(L"--auto") != std::wstring::npos;
++  g_now = arguments.find(L"--now") != std::wstring::npos;
++  g_auto = g_now || arguments.find(L"--auto") != std::wstring::npos;
 +
 +  std::wstring release_base = kReleaseBase;
 +#if defined(YATESIUM_UPDATE_TEST_SOURCE)
@@ -978,7 +1052,9 @@ index 000000000..640dbff26
 +
 +  const std::wstring install_dir = ExeDir();
 +  const std::wstring data_dir = install_dir + L"\\Data";
-+  if (g_auto && PathExists(data_dir + L"\\no-update.txt")) {
++  // The switch stops the automatic check. A check that the user asked for on
++  // the About page still runs.
++  if (g_auto && !g_now && PathExists(data_dir + L"\\no-update.txt")) {
 +    return 0;
 +  }
 +
@@ -989,12 +1065,18 @@ index 000000000..640dbff26
 +
 +  int exit_code = 0;
 +  HANDLE mutex = CreateMutexW(nullptr, FALSE, MutexName(install_dir).c_str());
-+  DWORD wait = mutex ? WaitForSingleObject(mutex, 0) : WAIT_FAILED;
++  // A check from the About page waits for an updater that is in its start-up
++  // delay to get out of the way. One that is waiting for the browser to
++  // close keeps the lock; its state file already says "ready".
++  DWORD wait =
++      mutex ? WaitForSingleObject(mutex, g_now ? 90000 : 0) : WAIT_FAILED;
 +  if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {
 +    // Another updater is already working on this folder.
 +    Say(L"An update is already in progress for this folder.");
 +  } else {
 +    if (MakeDirs(data_dir + L"\\Update")) {
++      g_state_path = data_dir + L"\\Update\\state.txt";
++      g_relaunch_path = data_dir + L"\\Update\\relaunch";
 +      g_log_path = data_dir + L"\\Update\\update.log";
 +      WIN32_FILE_ATTRIBUTE_DATA log_data;
 +      if (GetFileAttributesExW(g_log_path.c_str(), GetFileExInfoStandard,
@@ -1006,8 +1088,10 @@ index 000000000..640dbff26
 +    std::wstring error;
 +    if (!Update(install_dir, release_base, &error)) {
 +      Say(L"Update failed: " + error + L".");
++      WriteState(L"failed " + error);
 +      exit_code = 1;
 +    }
++    RelaunchBrowserIfAsked(install_dir);
 +    ReleaseMutex(mutex);
 +  }
 +  if (mutex) {

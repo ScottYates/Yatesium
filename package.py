@@ -9,8 +9,10 @@ Usage: package.py --build-dir <dir used by build.py>
 """
 
 import argparse
+import datetime
 import glob
 import re
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -62,6 +64,22 @@ Open-source licenses: yatesium://credits
 
 # Yatesium's own build outputs, which Chromium's file list does not know.
 EXTRA = ('yatesium_update.exe',)
+
+
+def build_info():
+    """Returns "name=value" lines for version.txt: the commit and the date."""
+    lines = []
+    try:
+        commit = subprocess.run(
+            ['git', 'rev-parse', '--short', 'HEAD'], cwd=ROOT,
+            capture_output=True, text=True, check=True).stdout.strip()
+        if commit:
+            lines.append('commit=' + commit)
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    lines.append('built=' + datetime.datetime.now(
+        datetime.timezone.utc).strftime('%Y-%m-%d'))
+    return ''.join(line + '\n' for line in lines)
 
 
 def read_text(name):
@@ -119,7 +137,8 @@ def main():
             archive.write(files[name], 'Yatesium/' + name)
         archive.writestr('Yatesium/README.txt', README % {'version': version})
         # The updater compares this with the tag of the latest release.
-        archive.writestr('Yatesium/version.txt', version + '\n')
+        # Further lines are shown on the About page.
+        archive.writestr('Yatesium/version.txt', version + '\n' + build_info())
     leftovers = [name for name in sorted(files) if 'chrom' in name.lower()]
     if leftovers:
         print('Warning: packaged files still named after Chrome: ' +
