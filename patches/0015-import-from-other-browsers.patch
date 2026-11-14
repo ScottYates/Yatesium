@@ -77,10 +77,10 @@ index d79e9dfdb..57d21b5ee 100644
    map.AddWebUIConfig(std::make_unique<FamilyLinkUserInternalsUIConfig>());
 diff --git a/chrome/browser/yatesium_import.cc b/chrome/browser/yatesium_import.cc
 new file mode 100644
-index 000000000..61bcd7c24
+index 000000000..1488a03cb
 --- /dev/null
 +++ b/chrome/browser/yatesium_import.cc
-@@ -0,0 +1,1956 @@
+@@ -0,0 +1,1957 @@
 +// Yatesium: the import page. See yatesium_import.h.
 +//
 +// How the page works: it is plain HTML built here, with no script. Each
@@ -170,6 +170,7 @@ index 000000000..61bcd7c24
 +#include "ui/gfx/codec/png_codec.h"
 +#include "ui/gfx/native_ui_types.h"
 +#include "ui/shell_dialogs/select_file_dialog.h"
++#include "ui/shell_dialogs/select_file_policy.h"
 +#include "ui/shell_dialogs/selected_file_info.h"
 +#include "url/gurl.h"
 +#include "url/origin.h"
