@@ -111,7 +111,8 @@ on `yatesium://extensions`.
 `yatesium://import` also saves this browser's setup to one file and reads it
 back.
 
-"Export to a settings file" asks where to save and writes a zip that holds:
+"Export to a settings file" asks where to save, shows a progress bar while it
+works, and writes a zip that holds:
 
 - bookmarks
 - browser settings

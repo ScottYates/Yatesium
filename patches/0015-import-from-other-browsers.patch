@@ -77,10 +77,10 @@ index d79e9dfdb..57d21b5ee 100644
    map.AddWebUIConfig(std::make_unique<FamilyLinkUserInternalsUIConfig>());
 diff --git a/chrome/browser/yatesium_import.cc b/chrome/browser/yatesium_import.cc
 new file mode 100644
-index 000000000..1488a03cb
+index 000000000..19a55453f
 --- /dev/null
 +++ b/chrome/browser/yatesium_import.cc
-@@ -0,0 +1,1957 @@
+@@ -0,0 +1,2161 @@
 +// Yatesium: the import page. See yatesium_import.h.
 +//
 +// How the page works: it is plain HTML built here, with no script. Each
@@ -95,6 +95,8 @@ index 000000000..1488a03cb
 +
 +#include "chrome/browser/yatesium_import.h"
 +
++#include <atomic>
++#include <iterator>
 +#include <map>
 +#include <memory>
 +#include <optional>
@@ -125,6 +127,7 @@ index 000000000..1488a03cb
 +#include "base/task/single_thread_task_runner.h"
 +#include "base/task/task_traits.h"
 +#include "base/task/thread_pool.h"
++#include "base/time/time.h"
 +#include "base/unguessable_token.h"
 +#include "base/values.h"
 +#include "base/version.h"
@@ -247,6 +250,12 @@ index 000000000..1488a03cb
 +  bool from_settings_file = false;
 +};
 +
++enum class ExportPhase { kNone, kRunning, kDone, kFailed };
++
++// How far the running export has got, in percent. Written by the export on
++// the thread pool, read by the progress page on the UI thread.
++std::atomic<int> g_export_percent{0};
++
 +// The result of the last scan and the token of the links on the page that
 +// showed it. Used on the UI thread only.
 +struct ScanState {
@@ -257,6 +266,9 @@ index 000000000..1488a03cb
 +  base::FilePath file_temp_dir;
 +  bool file_has_settings = false;
 +  std::vector<EngineEntry> file_engines;
++  // The export to a settings file that was started last.
++  ExportPhase export_phase = ExportPhase::kNone;
++  std::string export_path;
 +};
 +
 +ScanState& GetScanState() {
@@ -1057,11 +1069,18 @@ index 000000000..1488a03cb
 +  if (!base::CreateDirectory(out)) {
 +    return false;
 +  }
++  // Collecting the files is the first 40 percent, by the number of parts
++  // done. Writing the zip is the rest, by the number of bytes done.
++  constexpr int kCollectPercent = 40;
++  const int parts = static_cast<int>(std::size(kSettingsFiles) +
++                                     std::size(kSettingsDirs) + 1);
++  int parts_done = 0;
 +  for (const char* file : kSettingsFiles) {
 +    const base::FilePath from = profile_dir.AppendASCII(file);
 +    if (base::PathExists(from)) {
 +      base::CopyFile(from, out.AppendASCII(file));
 +    }
++    g_export_percent.store(++parts_done * kCollectPercent / parts);
 +  }
 +  // The browser has these folders open. Files it is writing at this moment
 +  // may be skipped; the databases are built to be read without them.
@@ -1070,6 +1089,7 @@ index 000000000..1488a03cb
 +    if (base::DirectoryExists(from)) {
 +      CopyTree(from, AppendRelative(out, dir));
 +    }
++    g_export_percent.store(++parts_done * kCollectPercent / parts);
 +  }
 +  base::FileEnumerator databases(profile_dir.AppendASCII(kIndexedDBDir),
 +                                 /*recursive=*/false,
@@ -1089,8 +1109,28 @@ index 000000000..1488a03cb
 +  if (!engines_json.empty()) {
 +    base::WriteFile(root.AppendASCII(kSettingsEnginesFile), engines_json);
 +  }
++  g_export_percent.store(kCollectPercent);
 +  base::DeleteFile(dest_file);
-+  return zip::Zip(root, dest_file, /*include_hidden_files=*/true);
++
++  const int64_t total_bytes = base::ComputeDirectorySize(root);
++  zip::ZipParams params;
++  params.src_dir = root;
++  params.dest_file = dest_file;
++  params.recursive = true;
++  params.include_hidden_files = true;
++  params.progress_period = base::Milliseconds(250);
++  params.progress_callback = base::BindRepeating(
++      [](int64_t total, const zip::Progress& progress) {
++        if (total > 0) {
++          const int64_t done = progress.bytes * (100 - kCollectPercent) / total;
++          g_export_percent.store(
++              kCollectPercent +
++              static_cast<int>(done > 59 ? 59 : (done < 0 ? 0 : done)));
++        }
++        return true;
++      },
++      total_bytes);
++  return zip::Zip(params);
 +}
 +
 +struct OpenedFile {
@@ -1456,19 +1496,159 @@ index 000000000..1488a03cb
 +  return base::EscapeForHTML(text);
 +}
 +
-+std::string PageStart() {
++// The look of the page. Served as "style.css" from this page's own address.
++constexpr char kStyleSheet[] = R"css(
++:root {
++  color-scheme: light dark;
++  --bg: #f6f7f9;
++  --card: #ffffff;
++  --text: #1f2328;
++  --muted: #5f6b7a;
++  --line: #dfe3e8;
++  --accent: #1a73e8;
++  --accent-text: #ffffff;
++  --danger: #c5221f;
++}
++@media (prefers-color-scheme: dark) {
++  :root {
++    --bg: #1b1d21;
++    --card: #25282d;
++    --text: #e6e8eb;
++    --muted: #9aa4b2;
++    --line: #3a3f46;
++    --accent: #8ab4f8;
++    --accent-text: #11151a;
++    --danger: #f28b82;
++  }
++}
++* { box-sizing: border-box; }
++body {
++  margin: 0;
++  background: var(--bg);
++  color: var(--text);
++  font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
++}
++main { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
++h1 { font-size: 24px; font-weight: 600; margin: 0 0 20px; }
++h2 { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
++h3 {
++  font-size: 12px;
++  font-weight: 600;
++  text-transform: uppercase;
++  letter-spacing: 0.05em;
++  color: var(--muted);
++  margin: 18px 0 6px;
++}
++p { margin: 8px 0; }
++.card {
++  background: var(--card);
++  border: 1px solid var(--line);
++  border-radius: 12px;
++  padding: 20px 22px;
++  margin: 0 0 16px;
++}
++.muted { color: var(--muted); font-weight: 400; }
++ul { margin: 6px 0; padding-left: 20px; }
++ul.checks { list-style: none; padding: 0; }
++ul.checks li { padding: 6px 0; border-top: 1px solid var(--line); }
++ul.checks li:first-child { border-top: 0; }
++label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
++input[type="checkbox"] {
++  width: 16px;
++  height: 16px;
++  margin: 3px 0 0;
++  flex: none;
++  accent-color: var(--accent);
++}
++.actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
++.button {
++  display: inline-block;
++  font: inherit;
++  font-weight: 600;
++  padding: 8px 16px;
++  border-radius: 8px;
++  border: 1px solid var(--line);
++  background: transparent;
++  color: var(--accent);
++  text-decoration: none;
++  cursor: pointer;
++}
++.button:hover { border-color: var(--accent); }
++.button.primary {
++  background: var(--accent);
++  border-color: var(--accent);
++  color: var(--accent-text);
++}
++.button.danger {
++  background: var(--danger);
++  border-color: var(--danger);
++  color: var(--accent-text);
++}
++.button.primary:hover, .button.danger:hover { filter: brightness(1.08); }
++progress {
++  display: block;
++  width: 100%;
++  height: 12px;
++  margin: 14px 0 6px;
++  accent-color: var(--accent);
++}
++.percent { color: var(--muted); font-variant-numeric: tabular-nums; }
++)css";
++
++// `head_extra` is added to the page's head, for the progress page's refresh.
++std::string PageStart(const std::string& head_extra = std::string()) {
 +  return "<!doctype html><html><head><meta charset=\"utf-8\">"
-+         "<title>Import and export</title></head><body>"
-+         "<h1>Import and export</h1>";
++         "<meta name=\"color-scheme\" content=\"light dark\">"
++         "<title>Import and export</title>"
++         "<link rel=\"stylesheet\" href=\"style.css\">" +
++         head_extra +
++         "</head><body><main><h1>Import and export</h1>";
 +}
 +
 +std::string PageEnd() {
-+  return "</body></html>";
++  return "</main></body></html>";
++}
++
++std::string BackButton() {
++  return "<p class=\"actions\"><a class=\"button\" href=\"./\">Back to the "
++         "list</a></p>";
 +}
 +
 +std::string BuildMessagePage(const std::string& message) {
-+  return PageStart() + "<p>" + Escape(message) +
-+         "</p><p><a href=\"./\">Back to the list</a></p>" + PageEnd();
++  return PageStart() + "<section class=\"card\"><p>" + Escape(message) +
++         "</p>" + BackButton() + "</section>" + PageEnd();
++}
++
++// The page shown while a settings file is being written. It loads itself
++// again every second until the export has finished.
++std::string BuildProgressPage() {
++  ScanState& state = GetScanState();
++  switch (state.export_phase) {
++    case ExportPhase::kRunning: {
++      const std::string percent =
++          base::NumberToString(g_export_percent.load());
++      return PageStart("<meta http-equiv=\"refresh\" "
++                       "content=\"1;url=progress\">") +
++             "<section class=\"card\"><h2>Exporting settings</h2>"
++             "<p>Writing " +
++             Escape(state.export_path) +
++             "</p><progress max=\"100\" value=\"" + percent +
++             "\"></progress><p class=\"percent\">" + percent +
++             " %</p></section>" + PageEnd();
++    }
++    case ExportPhase::kDone:
++      return PageStart() +
++             "<section class=\"card\"><h2>Export finished</h2>"
++             "<p>The settings file was saved as " +
++             Escape(state.export_path) +
++             "</p><progress max=\"100\" value=\"100\"></progress>" +
++             BackButton() + "</section>" + PageEnd();
++    case ExportPhase::kFailed:
++      return BuildMessagePage("The settings file could not be written.");
++    case ExportPhase::kNone:
++      break;
++  }
++  return BuildMessagePage("No export is running.");
 +}
 +
 +// Makes a new token for the links and forms of the page being built. The
@@ -1486,7 +1666,7 @@ index 000000000..1488a03cb
 +                     const std::string& label) {
 +  return "<label><input type=\"checkbox\" name=\"" + Escape(name) +
 +         "\" value=\"" + Escape(value) + "\"" + (checked ? " checked" : "") +
-+         "> " + label + "</label>";
++         "><span>" + label + "</span></label>";
 +}
 +
 +// Returns the form with a checkbox for each thing of `source` that is not
@@ -1500,28 +1680,28 @@ index 000000000..1488a03cb
 +  std::string items;
 +
 +  if (offer_settings) {
-+    items += "<h3>Settings</h3><p>" +
++    items += "<h3>Settings</h3><ul class=\"checks\"><li>" +
 +             Checkbox("s", "1", /*checked=*/true,
 +                      "Browser settings. Settings in the file replace the "
 +                      "current ones where they differ.") +
-+             "</p>";
++             "</li></ul>";
 +  }
 +
 +  if (engine_count > 0) {
-+    items += "<h3>Search engines</h3><p>" +
++    items += "<h3>Search engines</h3><ul class=\"checks\"><li>" +
 +             Checkbox("q", "1", /*checked=*/true,
 +                      base::NumberToString(engine_count) +
 +                          " search engines you added. One whose keyword is "
 +                          "already in use here is skipped.") +
-+             "</p>";
++             "</li></ul>";
 +  }
 +
 +  if (source.bookmark_count > 0) {
-+    items += "<h3>Bookmarks</h3><p>" +
++    items += "<h3>Bookmarks</h3><ul class=\"checks\"><li>" +
 +             Checkbox("b", "1", /*checked=*/true,
 +                      base::NumberToString(source.bookmark_count) +
 +                          " bookmarks") +
-+             "</p>";
++             "</li></ul>";
 +  }
 +
 +  std::string app_items;
@@ -1531,12 +1711,12 @@ index 000000000..1488a03cb
 +    }
 +    app_items += "<li>" +
 +                 Checkbox("a", app.app_id, /*checked=*/true,
-+                          Escape(app.name) + " (" +
-+                              Escape(app.start_url.GetHost()) + ")") +
++                          Escape(app.name) + " <span class=\"muted\">" +
++                              Escape(app.start_url.GetHost()) + "</span>") +
 +                 "</li>";
 +  }
 +  if (!app_items.empty()) {
-+    items += "<h3>Web apps</h3><ul>" + app_items + "</ul>";
++    items += "<h3>Web apps</h3><ul class=\"checks\">" + app_items + "</ul>";
 +  }
 +
 +  std::string extension_items;
@@ -1547,11 +1727,13 @@ index 000000000..1488a03cb
 +    extension_items +=
 +        "<li>" +
 +        Checkbox("e", extension.id, /*checked=*/false,
-+                 Escape(extension.name) + " " + Escape(extension.version)) +
++                 Escape(extension.name) + " <span class=\"muted\">" +
++                     Escape(extension.version) + "</span>") +
 +        "</li>";
 +  }
 +  if (!extension_items.empty()) {
-+    items += "<h3>Extensions</h3><ul>" + extension_items + "</ul>";
++    items +=
++        "<h3>Extensions</h3><ul class=\"checks\">" + extension_items + "</ul>";
 +  }
 +
 +  if (items.empty()) {
@@ -1562,7 +1744,8 @@ index 000000000..1488a03cb
 +         Escape(GetScanState().token) +
 +         "\"><input type=\"hidden\" name=\"p\" value=\"" + Escape(source_id) +
 +         "\">" + items +
-+         "<p><button type=\"submit\">Import selected</button></p></form>";
++         "<p class=\"actions\"><button class=\"button primary\" "
++         "type=\"submit\">Import selected</button></p></form>";
 +}
 +
 +// The main page: the settings file actions, then one form per profile of
@@ -1572,20 +1755,20 @@ index 000000000..1488a03cb
 +  const std::string token = NewToken();
 +  std::string html = PageStart();
 +  html +=
-+      "<h2>Settings file</h2>"
++      "<section class=\"card\"><h2>Settings file</h2>"
 +      "<p>A settings file holds this browser's bookmarks, web apps, settings, "
-+      "the search engines you added, and extensions with their data. Use it as a backup or to set up "
-+      "another copy of Yatesium. It does not hold history, saved passwords "
-+      "or sign-ins.</p>"
-+      "<p><a href=\"export?t=" +
++      "the search engines you added, and extensions with their data. Use it "
++      "as a backup or to set up another copy of Yatesium. It does not hold "
++      "history, saved passwords or sign-ins.</p>"
++      "<p class=\"actions\"><a class=\"button primary\" href=\"export?t=" +
 +      Escape(token) +
-+      "\">Export to a settings file...</a></p>"
-+      "<p><a href=\"open?t=" +
++      "\">Export to a settings file</a>"
++      "<a class=\"button\" href=\"open?t=" +
 +      Escape(token) +
-+      "\">Import from a settings file...</a></p>"
-+      "<hr><h2>Other browsers</h2>"
-+      "<p>This part lists what was found in other Chromium-based browsers of "
-+      "your Windows account. Tick what you want and click \"Import "
++      "\">Import from a settings file</a></p></section>"
++      "<section class=\"card\"><h2>Other browsers</h2>"
++      "<p>What was found in other Chromium-based browsers of your Windows "
++      "account is listed below. Tick what you want and click \"Import "
 +      "selected\". Nothing is imported before that.</p>"
 +      "<ul>"
 +      "<li>Bookmarks are added to a new folder on the bookmark bar.</li>"
@@ -1600,15 +1783,18 @@ index 000000000..1488a03cb
 +    html += "<p><b>No other browser with something to import was "
 +            "found.</b></p>";
 +  }
++  html += "</section>";
 +  for (size_t index = 0; index < state.profiles.size(); ++index) {
 +    const SourceProfile& source = state.profiles[index];
-+    html += "<hr><h3>" + Escape(source.browser) + " (" +
-+            Escape(source.profile_name) + ")</h3>";
++    html += "<section class=\"card\"><h2>" + Escape(source.browser) +
++            " <span class=\"muted\">" + Escape(source.profile_name) +
++            "</span></h2>";
 +    const std::string form =
 +        BuildSourceForm(profile, source, base::NumberToString(index),
 +                        /*offer_settings=*/false, /*engine_count=*/0);
 +    html += form.empty() ? "<p>Everything from this profile is already here.</p>"
 +                         : form;
++    html += "</section>";
 +  }
 +  html += PageEnd();
 +  return html;
@@ -1624,29 +1810,33 @@ index 000000000..1488a03cb
 +  const std::string token = NewToken();
 +  const SourceProfile& source = *state.file;
 +  std::string html = PageStart();
-+  html += "<h2>Settings file: " + Escape(source.profile_name) + "</h2>";
++  html += "<section class=\"card\"><h2>Settings file <span class=\"muted\">" +
++          Escape(source.profile_name) + "</span></h2>";
 +  html += "<p>It holds " + base::NumberToString(source.bookmark_count) +
 +          " bookmarks, " + base::NumberToString(source.apps.size()) +
 +          " web apps, " + base::NumberToString(source.extensions.size()) +
 +          " extensions and " +
 +          base::NumberToString(state.file_engines.size()) +
 +          " search engines you added" +
-+          (state.file_has_settings ? ", and browser settings." : ".") + "</p>";
++          (state.file_has_settings ? ", and browser settings." : ".") +
++          "</p></section>";
 +
 +  html +=
-+      "<hr><h3>Replace everything</h3>"
++      "<section class=\"card\"><h2>Replace everything</h2>"
 +      "<p>Makes this browser match the file: bookmarks, settings, search "
 +      "engines you added, web apps, and extensions with their data. What is "
 +      "here now in those areas is overwritten, including bookmarks, search "
-+      "engines, web apps and extensions that the file does not have. History, saved passwords and sign-ins are kept. "
-+      "The browser closes and starts again.</p>"
++      "engines, web apps and extensions that the file does not have. "
++      "History, saved passwords and sign-ins are kept. The browser closes "
++      "and starts again.</p>"
 +      "<form action=\"restore\" method=\"get\">"
 +      "<input type=\"hidden\" name=\"t\" value=\"" +
 +      Escape(token) +
-+      "\"><p><button type=\"submit\">Replace everything and relaunch"
-+      "</button></p></form>";
++      "\"><p class=\"actions\"><button class=\"button danger\" "
++      "type=\"submit\">Replace everything and relaunch</button></p></form>"
++      "</section>";
 +
-+  html += "<hr><h3>Add to this browser</h3>"
++  html += "<section class=\"card\"><h2>Add to this browser</h2>"
 +          "<p>Adds what you tick to what is already here. Things that are "
 +          "already here are not listed. An extension brings its stored data "
 +          "along if this browser has none for it.</p>";
@@ -1654,7 +1844,7 @@ index 000000000..1488a03cb
 +      BuildSourceForm(profile, source, "file", state.file_has_settings,
 +                      state.file_engines.size());
 +  html += form.empty() ? "<p>Everything in the file is already here.</p>" : form;
-+  html += "<p><a href=\"./\">Back to the list</a></p>";
++  html += "</section>" + BackButton();
 +  html += PageEnd();
 +  return html;
 +}
@@ -1810,27 +2000,22 @@ index 000000000..1488a03cb
 +  Respond(std::move(callback), BuildListPage(profile.get()));
 +}
 +
-+// Export: ask where to save, write pending settings to disk, build the zip.
++// Export: ask where to save, show the progress page, write pending settings
++// to disk, build the zip. The progress page asks again every second.
 +
-+void OnExportDone(const base::FilePath& path,
-+                  content::URLDataSource::GotDataCallback callback,
-+                  bool ok) {
-+  Respond(std::move(callback),
-+          BuildMessagePage(ok ? "The settings file was saved as " +
-+                                    path.AsUTF8Unsafe() + "."
-+                              : "The settings file could not be written."));
++void OnExportDone(bool ok) {
++  GetScanState().export_phase = ok ? ExportPhase::kDone : ExportPhase::kFailed;
 +}
 +
 +void RunExport(const base::FilePath& profile_dir,
 +               const base::FilePath& path,
-+               const std::string& engines_json,
-+               content::URLDataSource::GotDataCallback callback) {
++               const std::string& engines_json) {
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE,
 +      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
 +       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
 +      base::BindOnce(&ExportSettings, profile_dir, path, engines_json),
-+      base::BindOnce(&OnExportDone, path, std::move(callback)));
++      base::BindOnce(&OnExportDone));
 +}
 +
 +void OnExportPathChosen(base::WeakPtr<Profile> profile,
@@ -1840,10 +2025,19 @@ index 000000000..1488a03cb
 +    Respond(std::move(callback), BuildMessagePage("Nothing was exported."));
 +    return;
 +  }
++  ScanState& state = GetScanState();
++  if (state.export_phase == ExportPhase::kRunning) {
++    Respond(std::move(callback), BuildProgressPage());
++    return;
++  }
++  state.export_phase = ExportPhase::kRunning;
++  state.export_path = path.AsUTF8Unsafe();
++  g_export_percent.store(0);
++  Respond(std::move(callback), BuildProgressPage());
 +  // The settings on disk can be a little behind. Write them out first.
 +  profile->GetPrefs()->CommitPendingWrite(
 +      base::BindOnce(&RunExport, profile->GetPath(), path,
-+                     EnginesToJson(profile.get()), std::move(callback)));
++                     EnginesToJson(profile.get())));
 +}
 +
 +// Import from a file: ask which file, unpack it, show what it holds.
@@ -1943,6 +2137,14 @@ index 000000000..1488a03cb
 +      return;
 +    }
 +    const std::string path(url.path());
++    if (path == "/style.css") {
++      Respond(std::move(callback), kStyleSheet);
++      return;
++    }
++    if (path == "/progress") {
++      Respond(std::move(callback), BuildProgressPage());
++      return;
++    }
 +    if (path == "/run") {
 +      Respond(std::move(callback), RunImport(profile_.get(), url));
 +      return;
@@ -1979,7 +2181,9 @@ index 000000000..1488a03cb
 +        base::BindOnce(&OnScanDone, profile_, std::move(callback)));
 +  }
 +
-+  std::string GetMimeType(const GURL& url) override { return "text/html"; }
++  std::string GetMimeType(const GURL& url) override {
++    return url.path() == "/style.css" ? "text/css" : "text/html";
++  }
 +
 +  bool AllowCaching() override { return false; }
 +
