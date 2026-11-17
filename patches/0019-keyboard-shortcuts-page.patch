@@ -1,0 +1,2443 @@
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 60de8761..a25c4ab1 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1616,6 +1616,12 @@ source_set("core") {
+       "yatesium_import.cc",
+       "yatesium_import.h",
+ 
++      # Yatesium: the keyboard shortcuts page.
++      "yatesium_shortcut_table.cc",
++      "yatesium_shortcut_table.h",
++      "yatesium_shortcuts.cc",
++      "yatesium_shortcuts.h",
++
+       "fullscreen_win.cc",
+       "icon_loader_win.cc",
+       "memory_details_win.cc",
+diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
+index 87fb0a15..78e04428 100644
+--- a/chrome/browser/chrome_browser_main.cc
++++ b/chrome/browser/chrome_browser_main.cc
+@@ -252,6 +252,7 @@
+ #include "chrome/browser/win/chrome_select_file_dialog_factory.h"
+ #include "chrome/browser/win/parental_controls.h"
+ #include "chrome/browser/yatesium_import.h"
++#include "chrome/browser/yatesium_shortcuts.h"
+ #include "ui/shell_dialogs/select_file_dialog.h"
+ 
+ #if BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+@@ -1924,6 +1925,9 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+   // Yatesium: a "replace everything" import from a settings file is carried
+   // out here, before any profile opens its files.
+   yatesium::ApplyPendingRestore(user_data_dir_);
++  // Yatesium: use the keyboard shortcuts the user changed. This has to
++  // happen before the first browser window is created.
++  yatesium::InitShortcuts();
+ #endif
+   StartupProfileInfo profile_info = CreateInitialProfile(
+       user_data_dir_, *base::CommandLine::ForCurrentProcess());
+diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
+index 334da9ad..e29acca1 100644
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -529,6 +529,7 @@
+ #include "chrome/browser/media/media_foundation_service_monitor.h"
+ #include "chrome/browser/os_crypt/app_bound_encryption_provider_win.h"
+ #include "chrome/browser/webnn/webnn_prefs.h"
++#include "chrome/browser/yatesium_shortcuts.h"
+ #include "components/os_crypt/async/browser/dpapi_key_provider.h"
+ #include "components/os_crypt/async/browser/os_crypt_win.h"
+ #endif  // BUILDFLAG(IS_WIN)
+@@ -1916,6 +1917,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
+   registry->RegisterTimePref(prefs::kStartupLaunchInfobarLastDeclinedTime,
+                              base::Time());
+   registry->RegisterIntegerPref(prefs::kStartupLaunchInfobarDeclinedCount, 0);
++  // Yatesium: the keyboard shortcuts the user changed.
++  yatesium::RegisterShortcutPrefs(registry);
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+ #if BUILDFLAG(ENABLE_DOWNGRADE_PROCESSING)
+diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html b/chrome/browser/resources/settings/settings_menu/settings_menu.html
+index ca97d5e6..db5de479 100644
+--- a/chrome/browser/resources/settings/settings_menu/settings_menu.html
++++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html
+@@ -1,5 +1,5 @@
+     <div role="navigation">
+-      <cr-menu-selector id="menu" selectable="a:not(#extensionsLink):not(#importLink)"
++      <cr-menu-selector id="menu" selectable="a:not(#extensionsLink):not(#importLink):not(#shortcutsLink)"
+           attr-for-selected="href" @iron-activate="${this.onIronActivate_}"
+           @click="${this.onLinkClick_}" selected-attribute="selected">
+         <a role="menuitem"
+@@ -121,6 +121,14 @@
+           <div class="cr-icon icon-external"></div>
+           <cr-ripple></cr-ripple>
+         </a>
++        <a role="menuitem" id="shortcutsLink" class="cr-nav-menu-item"
++            href="chrome://shortcuts" target="_blank"
++            title="$i18n{yatesiumShortcutsTooltip}">
++          <cr-icon icon="settings:build"></cr-icon>
++          <span class="menu-label">$i18n{yatesiumShortcutsTitle}</span>
++          <div class="cr-icon icon-external"></div>
++          <cr-ripple></cr-ripple>
++        </a>
+         <a role="menuitem" id="importLink" class="cr-nav-menu-item"
+             href="chrome://import" target="_blank"
+             title="$i18n{yatesiumImportTooltip}">
+diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.ts b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
+index f82af5a7..e2b1e5c7 100644
+--- a/chrome/browser/resources/settings/settings_menu/settings_menu.ts
++++ b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
+@@ -133,8 +133,10 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
+    * accessibility purposes, taps are handled separately.
+    */
+   protected onLinkClick_(event: Event) {
+-    if ((event.target as HTMLElement)
+-            .matches('a:not(#extensionsLink):not(#importLink)')) {
++    // Yatesium: the links that open another page in a new tab stay links.
++    const selector =
++        'a:not(#extensionsLink):not(#importLink):not(#shortcutsLink)';
++    if ((event.target as HTMLElement).matches(selector)) {
+       event.preventDefault();
+     }
+   }
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 1e352a02..d9ae15e5 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -1107,7 +1107,10 @@ if (!is_android) {
+ source_set("accelerator_table") {
+   public = [ "accelerator_table.h" ]
+   sources = [ "accelerator_table.cc" ]
+-  public_deps = [ "//ui/actions:actions_headers" ]
++  public_deps = [
++    "//base",
++    "//ui/actions:actions_headers",
++  ]
+   deps = [
+     "//build:branding_buildflags",
+     "//chrome/app:command_ids",
+diff --git a/chrome/browser/ui/accelerator_table.cc b/chrome/browser/ui/accelerator_table.cc
+index a000ed9a..e3f5d8d0 100644
+--- a/chrome/browser/ui/accelerator_table.cc
++++ b/chrome/browser/ui/accelerator_table.cc
+@@ -7,6 +7,7 @@
+ #include <stddef.h>
+ 
+ #include <algorithm>
++#include <utility>
+ #include <vector>
+ 
+ #include "base/feature_list.h"
+@@ -305,6 +306,17 @@ std::vector<AcceleratorMapping>* GetAcceleratorsPointer() {
+   return accelerators.get();
+ }
+ 
++// Yatesium: see SetAcceleratorListFilter() in the header.
++AcceleratorListFilter& GetAcceleratorListFilter() {
++  static base::NoDestructor<AcceleratorListFilter> filter;
++  return *filter;
++}
++
++base::RepeatingClosureList& GetAcceleratorListChangedCallbacks() {
++  static base::NoDestructor<base::RepeatingClosureList> callbacks;
++  return *callbacks;
++}
++
+ }  // namespace
+ 
+ std::vector<AcceleratorMapping> GetAcceleratorList() {
+@@ -353,6 +365,11 @@ std::vector<AcceleratorMapping> GetAcceleratorList() {
+                          std::end(kTabGroupAcceleratorMap));
+ #endif  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_CHROMEOS)
+ 
++    // Yatesium: apply the shortcuts the user changed.
++    if (GetAcceleratorListFilter()) {
++      GetAcceleratorListFilter().Run(accelerators);
++    }
++
+     for (AcceleratorMapping& mapping : *accelerators) {
+       mapping.action_id = chrome::GetActionIdForCommandId(mapping.command_id);
+     }
+@@ -361,6 +378,21 @@ std::vector<AcceleratorMapping> GetAcceleratorList() {
+   return *accelerators;
+ }
+ 
++void SetAcceleratorListFilter(AcceleratorListFilter filter) {
++  GetAcceleratorListFilter() = std::move(filter);
++  ReloadAcceleratorList();
++}
++
++void ReloadAcceleratorList() {
++  GetAcceleratorsPointer()->clear();
++  GetAcceleratorListChangedCallbacks().Notify();
++}
++
++base::CallbackListSubscription AddAcceleratorListChangedCallback(
++    base::RepeatingClosure callback) {
++  return GetAcceleratorListChangedCallbacks().Add(std::move(callback));
++}
++
+ void ClearAcceleratorListForTesting() {
+   std::vector<AcceleratorMapping>* accelerators = GetAcceleratorsPointer();
+   accelerators->clear();
+diff --git a/chrome/browser/ui/accelerator_table.h b/chrome/browser/ui/accelerator_table.h
+index 171ee09c..c2e221d6 100644
+--- a/chrome/browser/ui/accelerator_table.h
++++ b/chrome/browser/ui/accelerator_table.h
+@@ -8,6 +8,8 @@
+ #include <optional>
+ #include <vector>
+ 
++#include "base/callback_list.h"
++#include "base/functional/callback.h"
+ #include "ui/actions/action_id.h"
+ #include "ui/events/keycodes/keyboard_codes.h"
+ 
+@@ -43,6 +45,23 @@ struct AcceleratorMapping {
+ // modifier key (e.g. escape).
+ std::vector<AcceleratorMapping> GetAcceleratorList();
+ 
++// Yatesium: the user can change shortcuts (see
++// chrome/browser/yatesium_shortcuts.h). A filter, when one is set, rewrites
++// the list each time GetAcceleratorList() builds it. Setting a filter builds
++// the list again.
++using AcceleratorListFilter =
++    base::RepeatingCallback<void(std::vector<AcceleratorMapping>*)>;
++void SetAcceleratorListFilter(AcceleratorListFilter filter);
++
++// Yatesium: throws the list away, so that the next GetAcceleratorList() builds
++// it again, and runs the callbacks added below.
++void ReloadAcceleratorList();
++
++// Yatesium: `callback` runs when the list has to be read again. It stops
++// running when the returned subscription is destroyed.
++base::CallbackListSubscription AddAcceleratorListChangedCallback(
++    base::RepeatingClosure callback);
++
+ // This function should be used only for testing. Clears the accelerator list.
+ void ClearAcceleratorListForTesting();
+ 
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+index d441b8a7..45c70209 100644
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -410,6 +410,7 @@
+ #include "chrome/browser/taskbar/taskbar_decorator_win.h"
+ #include "chrome/browser/win/jumplist.h"
+ #include "chrome/browser/win/jumplist_factory.h"
++#include "chrome/browser/yatesium_shortcuts.h"
+ #include "ui/gfx/color_palette.h"
+ #include "ui/gfx/win/hwnd_util.h"
+ #include "ui/native_theme/native_theme_win.h"
+@@ -3231,6 +3232,16 @@ content::KeyboardEventProcessingResult BrowserView::PreHandleKeyboardEvent(
+     return content::KeyboardEventProcessingResult::NOT_HANDLED;
+   }
+ 
++#if BUILDFLAG(IS_WIN)
++  // Yatesium: the keyboard shortcuts page gets every key first, including
++  // the keys of commands that a page normally cannot intercept, such as
++  // Ctrl+T. It needs this to record a new shortcut. A key the page does not
++  // use comes back and is then handled as a shortcut in the usual way.
++  if (yatesium::IsShortcutsPage(GetActiveWebContents())) {
++    return content::KeyboardEventProcessingResult::NOT_HANDLED;
++  }
++#endif
++
+   ui::Accelerator accelerator =
+       ui::GetAcceleratorFromNativeWebKeyboardEvent(event);
+ 
+@@ -5054,6 +5065,11 @@ void BrowserView::AddedToWidget() {
+ #endif
+ 
+   LoadAccelerators();
++  // Yatesium: load them again whenever the user changes a shortcut. The
++  // subscription is a member, so the callback cannot outlive this view.
++  accelerators_changed_subscription_ =
++      AddAcceleratorListChangedCallback(base::BindRepeating(
++          &BrowserView::ReloadAccelerators, base::Unretained(this)));
+ 
+   // ImmersiveModeController may depend on the presence of a Widget, so it
+   // is initialized here.
+@@ -5693,6 +5709,30 @@ void BrowserView::LoadAccelerators() {
+   }
+ }
+ 
++void BrowserView::ReloadAccelerators() {
++  views::FocusManager* focus_manager = GetFocusManager();
++  if (!focus_manager) {
++    return;
++  }
++  // Unregister what LoadAccelerators() registered: the table, and the two
++  // Esc accelerators if the table does not have them.
++  for (const auto& entry : accelerator_table_) {
++    focus_manager->UnregisterAccelerator(entry.first, this);
++  }
++  const ui::Accelerator escape_pressed(ui::VKEY_ESCAPE, ui::EF_NONE,
++                                       ui::Accelerator::KeyState::PRESSED);
++  if (accelerator_table_.find(escape_pressed) == accelerator_table_.end()) {
++    focus_manager->UnregisterAccelerator(escape_pressed, this);
++  }
++  const ui::Accelerator escape_released(ui::VKEY_ESCAPE, ui::EF_NONE,
++                                        ui::Accelerator::KeyState::RELEASED);
++  if (accelerator_table_.find(escape_released) == accelerator_table_.end()) {
++    focus_manager->UnregisterAccelerator(escape_released, this);
++  }
++  accelerator_table_.clear();
++  LoadAccelerators();
++}
++
+ int BrowserView::GetCommandIDForAppCommandID(int app_command_id) const {
+ #if BUILDFLAG(IS_WIN)
+   switch (app_command_id) {
+diff --git a/chrome/browser/ui/views/frame/browser_view.h b/chrome/browser/ui/views/frame/browser_view.h
+index e7bfac16..9f54679f 100644
+--- a/chrome/browser/ui/views/frame/browser_view.h
++++ b/chrome/browser/ui/views/frame/browser_view.h
+@@ -969,6 +969,10 @@ class BrowserView : public BrowserWindow,
+   // use.
+   void LoadAccelerators();
+ 
++  // Yatesium: drops the accelerators LoadAccelerators() registered and loads
++  // them again. Runs when the user changes a keyboard shortcut.
++  void ReloadAccelerators();
++
+   // Retrieves the command id for the specified Windows app command.
+   int GetCommandIDForAppCommandID(int app_command_id) const;
+ 
+@@ -1256,6 +1260,9 @@ class BrowserView : public BrowserWindow,
+   // A mapping between accelerators and command IDs.
+   std::map<ui::Accelerator, int> accelerator_table_;
+ 
++  // Yatesium: keeps ReloadAccelerators() called while this view exists.
++  base::CallbackListSubscription accelerators_changed_subscription_;
++
+   // True if we have already been initialized.
+   bool initialized_ = false;
+ 
+diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+index 57d21b5e..282a2751 100644
+--- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
++++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+@@ -180,6 +180,7 @@
+ #if BUILDFLAG(IS_WIN)
+ #include "chrome/browser/ui/webui/conflicts/conflicts_ui.h"
+ #include "chrome/browser/yatesium_import.h"
++#include "chrome/browser/yatesium_shortcuts.h"
+ #include "chrome/browser/ui/webui/default_browser/visual_guided_setter_ui.h"
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+@@ -294,6 +295,8 @@ void RegisterChromeWebUIConfigs() {
+ #if BUILDFLAG(IS_WIN)
+   // Yatesium: the import page.
+   map.AddWebUIConfig(std::make_unique<yatesium::ImportUIConfig>());
++  // Yatesium: the keyboard shortcuts page.
++  map.AddWebUIConfig(std::make_unique<yatesium::ShortcutsUIConfig>());
+ #endif
+   map.AddWebUIConfig(std::make_unique<DataSharingInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<DownloadInternalsUIConfig>());
+diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+index 2c80e83e..babb47ae 100644
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -4523,6 +4523,10 @@ void AddExtensionsStrings(content::WebUIDataSource* html_source) {
+   html_source->AddString(
+       "yatesiumImportTooltip",
+       u"Import from another browser, or export and import a settings file");
++  // Yatesium: the menu entry that opens the keyboard shortcuts page.
++  html_source->AddString("yatesiumShortcutsTitle", u"Keyboard shortcuts");
++  html_source->AddString("yatesiumShortcutsTooltip",
++                         u"Change the keyboard shortcuts of the browser");
+ }
+ 
+ void AddSecurityKeysStrings(content::WebUIDataSource* html_source) {
+diff --git a/chrome/browser/yatesium_import.cc b/chrome/browser/yatesium_import.cc
+index e8fa4a9c..75a3f63e 100644
+--- a/chrome/browser/yatesium_import.cc
++++ b/chrome/browser/yatesium_import.cc
+@@ -61,6 +61,7 @@
+ #include "chrome/browser/web_applications/web_app_install_params.h"
+ #include "chrome/browser/web_applications/web_app_provider.h"
+ #include "chrome/browser/web_applications/web_app_registrar.h"
++#include "chrome/browser/yatesium_shortcuts.h"
+ #include "components/bookmarks/browser/bookmark_model.h"
+ #include "components/bookmarks/browser/bookmark_node.h"
+ #include "components/pref_registry/pref_registry_syncable.h"
+@@ -184,6 +185,10 @@ struct ScanState {
+   base::FilePath file_temp_dir;
+   bool file_has_settings = false;
+   std::vector<EngineEntry> file_engines;
++  // The file's keyboard shortcuts, and the number of commands they change.
++  // The number is -1 if the file has none.
++  std::string file_shortcuts;
++  int file_shortcut_count = -1;
+   // The export to a settings file that was started last.
+   ExportPhase export_phase = ExportPhase::kNone;
+   std::string export_path;
+@@ -203,6 +208,9 @@ constexpr int kMaxBookmarkDepth = 100;
+ constexpr char kSettingsMarkerFile[] = "yatesium-settings.json";
+ // The search engines the user added, next to the marker file.
+ constexpr char kSettingsEnginesFile[] = "search-engines.json";
++// The keyboard shortcuts the user changed (see yatesium_shortcuts.h), next
++// to the marker file. Files written before the shortcuts page do not have it.
++constexpr char kSettingsShortcutsFile[] = "keyboard-shortcuts.json";
+ constexpr char kSettingsProfileDir[] = "profile";
+ // Holds a settings file that replaces the profile's files at the next start.
+ constexpr char kRestoreDirName[] = "Yatesium Restore";
+@@ -977,7 +985,8 @@ void ImportApps(Profile* profile,
+ // their data into the zip `dest_file`.
+ bool ExportSettings(const base::FilePath& profile_dir,
+                     const base::FilePath& dest_file,
+-                    const std::string& engines_json) {
++                    const std::string& engines_json,
++                    const std::string& shortcuts_json) {
+   base::ScopedTempDir staging;
+   if (!staging.CreateUniqueTempDir()) {
+     return false;
+@@ -1027,6 +1036,9 @@ bool ExportSettings(const base::FilePath& profile_dir,
+   if (!engines_json.empty()) {
+     base::WriteFile(root.AppendASCII(kSettingsEnginesFile), engines_json);
+   }
++  if (!shortcuts_json.empty()) {
++    base::WriteFile(root.AppendASCII(kSettingsShortcutsFile), shortcuts_json);
++  }
+   g_export_percent.store(kCollectPercent);
+   base::DeleteFile(dest_file);
+ 
+@@ -1057,6 +1069,8 @@ struct OpenedFile {
+   SourceProfile source;
+   bool has_settings = false;
+   std::vector<EngineEntry> engines;
++  // The content of the keyboard shortcuts file, or empty if there is none.
++  std::string shortcuts_json;
+ };
+ 
+ std::vector<EngineEntry> ReadEngines(const base::FilePath& file) {
+@@ -1118,6 +1132,11 @@ OpenedFile OpenSettingsFile(const base::FilePath& zip_file) {
+   opened.source.apps = ReadApps(profile_dir);
+   opened.source.extensions = ReadExtensions(profile_dir);
+   opened.engines = ReadEngines(temp_dir.AppendASCII(kSettingsEnginesFile));
++  if (!base::ReadFileToStringWithMaxSize(
++          temp_dir.AppendASCII(kSettingsShortcutsFile), &opened.shortcuts_json,
++          kMaxJsonSize)) {
++    opened.shortcuts_json.clear();
++  }
+   return opened;
+ }
+ 
+@@ -1671,7 +1690,8 @@ std::string BuildSourceForm(Profile* profile,
+                             const SourceProfile& source,
+                             const std::string& source_id,
+                             bool offer_settings,
+-                            size_t engine_count) {
++                            size_t engine_count,
++                            int shortcut_count) {
+   std::string items;
+ 
+   if (offer_settings) {
+@@ -1691,6 +1711,16 @@ std::string BuildSourceForm(Profile* profile,
+              "</li></ul>";
+   }
+ 
++  if (shortcut_count > 0) {
++    items += "<h3>Keyboard shortcuts</h3><ul class=\"checks\"><li>" +
++             Checkbox("k", "1", /*checked=*/true,
++                      "Changed keyboard shortcuts of " +
++                          base::NumberToString(shortcut_count) +
++                          " commands. Those commands get the shortcuts from "
++                          "the file. Other commands keep theirs.") +
++             "</li></ul>";
++  }
++
+   if (source.bookmark_count > 0) {
+     items += "<h3>Bookmarks</h3><ul class=\"checks\"><li>" +
+              Checkbox("b", "1", /*checked=*/true,
+@@ -1752,7 +1782,8 @@ std::string BuildListPage(Profile* profile) {
+   html +=
+       "<section class=\"card\"><h2>Settings file</h2>"
+       "<p>A settings file holds this browser's bookmarks, web apps, settings, "
+-      "the search engines you added, and extensions with their data. Use it "
++      "the search engines you added, the keyboard shortcuts you changed, and "
++      "extensions with their data. Use it "
+       "as a backup or to set up another copy of Yatesium. It does not hold "
+       "history, saved passwords or sign-ins.</p>"
+       "<p class=\"actions\"><a class=\"button primary\" href=\"export?t=" +
+@@ -1786,7 +1817,8 @@ std::string BuildListPage(Profile* profile) {
+             "</span></h2>";
+     const std::string form =
+         BuildSourceForm(profile, source, base::NumberToString(index),
+-                        /*offer_settings=*/false, /*engine_count=*/0);
++                        /*offer_settings=*/false, /*engine_count=*/0,
++                        /*shortcut_count=*/-1);
+     html += form.empty() ? "<p>Everything from this profile is already here.</p>"
+                          : form;
+     html += "</section>";
+@@ -1813,13 +1845,20 @@ std::string BuildFilePage(Profile* profile) {
+           " extensions and " +
+           base::NumberToString(state.file_engines.size()) +
+           " search engines you added" +
+-          (state.file_has_settings ? ", and browser settings." : ".") +
+-          "</p></section>";
++          (state.file_has_settings ? ", and browser settings." : ".");
++  if (state.file_shortcut_count > 0) {
++    html += " It also holds changed keyboard shortcuts of " +
++            base::NumberToString(state.file_shortcut_count) + " commands.";
++  } else if (state.file_shortcut_count == 0) {
++    html += " It also holds the keyboard shortcuts, none of them changed.";
++  }
++  html += "</p></section>";
+ 
+   html +=
+       "<section class=\"card\"><h2>Replace everything</h2>"
+       "<p>Makes this browser match the file: bookmarks, settings, search "
+-      "engines you added, web apps, and extensions with their data. What is "
++      "engines you added, keyboard shortcuts if the file has them, web apps, "
++      "and extensions with their data. What is "
+       "here now in those areas is overwritten, including bookmarks, search "
+       "engines, web apps and extensions that the file does not have. "
+       "History, saved passwords and sign-ins are kept. The browser closes "
+@@ -1837,7 +1876,7 @@ std::string BuildFilePage(Profile* profile) {
+           "along if this browser has none for it.</p>";
+   const std::string form =
+       BuildSourceForm(profile, source, "file", state.file_has_settings,
+-                      state.file_engines.size());
++                      state.file_engines.size(), state.file_shortcut_count);
+   html += form.empty() ? "<p>Everything in the file is already here.</p>" : form;
+   html += "</section>" + BackButton();
+   html += PageEnd();
+@@ -1880,6 +1919,7 @@ std::string RunImport(Profile* profile, const GURL& url) {
+   bool settings_ticked = false;
+   bool engines_ticked = false;
+   bool bookmarks_ticked = false;
++  bool shortcuts_ticked = false;
+   std::vector<std::string> app_ids;
+   std::vector<std::string> extension_ids;
+   for (net::QueryIterator it(url); !it.IsAtEnd(); it.Advance()) {
+@@ -1893,6 +1933,8 @@ std::string RunImport(Profile* profile, const GURL& url) {
+       engines_ticked = true;
+     } else if (key == "b") {
+       bookmarks_ticked = true;
++    } else if (key == "k") {
++      shortcuts_ticked = true;
+     } else if (key == "a") {
+       app_ids.push_back(value);
+     } else if (key == "e") {
+@@ -1925,6 +1967,8 @@ std::string RunImport(Profile* profile, const GURL& url) {
+   const bool engines = engines_ticked && source->from_settings_file &&
+                        !state.file_engines.empty();
+   const bool bookmarks = bookmarks_ticked && source->bookmark_count > 0;
++  const bool shortcuts = shortcuts_ticked && source->from_settings_file &&
++                         state.file_shortcut_count > 0;
+   std::vector<AppEntry> apps;
+   std::vector<ExtensionEntry> extensions;
+   for (const AppEntry& app : source->apps) {
+@@ -1940,7 +1984,7 @@ std::string RunImport(Profile* profile, const GURL& url) {
+     }
+   }
+ 
+-  if (!settings && !engines && !bookmarks && apps.empty() &&
++  if (!settings && !engines && !bookmarks && !shortcuts && apps.empty() &&
+       extensions.empty()) {
+     return BuildMessagePage("Nothing was selected. Nothing was imported.");
+   }
+@@ -1951,6 +1995,9 @@ std::string RunImport(Profile* profile, const GURL& url) {
+   if (engines) {
+     AddEngines(profile, state.file_engines, /*replace=*/false);
+   }
++  if (shortcuts) {
++    ImportShortcutsJson(state.file_shortcuts, /*replace=*/false);
++  }
+   if (bookmarks) {
+     ImportBookmarks(profile, *source);
+   }
+@@ -1970,6 +2017,9 @@ std::string RunImport(Profile* profile, const GURL& url) {
+   if (engines) {
+     message += "search engines, ";
+   }
++  if (shortcuts) {
++    message += "keyboard shortcuts, ";
++  }
+   message += bookmarks ? base::NumberToString(source->bookmark_count) : "0";
+   message += " bookmarks, " + base::NumberToString(apps.size()) +
+              " web apps, " + base::NumberToString(extensions.size()) +
+@@ -2004,12 +2054,14 @@ void OnExportDone(bool ok) {
+ 
+ void RunExport(const base::FilePath& profile_dir,
+                const base::FilePath& path,
+-               const std::string& engines_json) {
++               const std::string& engines_json,
++               const std::string& shortcuts_json) {
+   base::ThreadPool::PostTaskAndReplyWithResult(
+       FROM_HERE,
+       {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+-      base::BindOnce(&ExportSettings, profile_dir, path, engines_json),
++      base::BindOnce(&ExportSettings, profile_dir, path, engines_json,
++                     shortcuts_json),
+       base::BindOnce(&OnExportDone));
+ }
+ 
+@@ -2032,7 +2084,7 @@ void OnExportPathChosen(base::WeakPtr<Profile> profile,
+   // The settings on disk can be a little behind. Write them out first.
+   profile->GetPrefs()->CommitPendingWrite(
+       base::BindOnce(&RunExport, profile->GetPath(), path,
+-                     EnginesToJson(profile.get())));
++                     EnginesToJson(profile.get()), ExportShortcutsJson()));
+ }
+ 
+ // Import from a file: ask which file, unpack it, show what it holds.
+@@ -2056,6 +2108,10 @@ void OnFileOpened(base::WeakPtr<Profile> profile,
+   state.file_temp_dir = opened.temp_dir;
+   state.file_has_settings = opened.has_settings;
+   state.file_engines = std::move(opened.engines);
++  state.file_shortcuts = std::move(opened.shortcuts_json);
++  state.file_shortcut_count = state.file_shortcuts.empty()
++                                  ? -1
++                                  : CountShortcutsInJson(state.file_shortcuts);
+   LoadEngines(profile.get());
+   Respond(std::move(callback), BuildFilePage(profile.get()));
+ }
+@@ -2102,9 +2158,16 @@ void StartRestore(Profile* profile,
+   // Search engines are kept in a database that cannot be swapped like the
+   // other files, so they are replaced here, before the relaunch.
+   AddEngines(profile, state.file_engines, /*replace=*/true);
++  // Keyboard shortcuts are in Local State, which no profile file carries, so
++  // they are replaced here too. A file without them leaves them as they are.
++  if (state.file_shortcut_count >= 0) {
++    ImportShortcutsJson(state.file_shortcuts, /*replace=*/true);
++  }
+   // The unpacked files are moved away, so the file is no longer open here.
+   state.file.reset();
+   state.file_engines.clear();
++  state.file_shortcuts.clear();
++  state.file_shortcut_count = -1;
+   base::ThreadPool::PostTaskAndReplyWithResult(
+       FROM_HERE,
+       {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+diff --git a/chrome/browser/yatesium_shortcut_table.cc b/chrome/browser/yatesium_shortcut_table.cc
+new file mode 100644
+index 00000000..ea7a160b
+--- /dev/null
++++ b/chrome/browser/yatesium_shortcut_table.cc
+@@ -0,0 +1,673 @@
++// Yatesium: the data behind the keyboard shortcuts page. See the header.
++
++#include "chrome/browser/yatesium_shortcut_table.h"
++
++#include <set>
++
++#include "chrome/app/chrome_command_ids.h"
++
++namespace yatesium {
++
++namespace {
++
++constexpr char kTabs[] = "Tabs";
++constexpr char kTabGroups[] = "Tab groups";
++constexpr char kWindows[] = "Windows";
++constexpr char kNavigation[] = "Navigation";
++constexpr char kPage[] = "Page";
++constexpr char kBookmarks[] = "Bookmarks and history";
++constexpr char kTools[] = "Tools";
++constexpr char kFocus[] = "Keyboard focus";
++
++// The commands the page offers, in the order it shows them. Commands of one
++// section must be next to each other. A name must not change once a release
++// has shipped with it: it is what the stored settings refer to.
++constexpr ShortcutCommand kCommands[] = {
++    {IDC_NEW_TAB, "new_tab", "New tab", kTabs},
++    {IDC_NEW_TAB_TO_RIGHT, "new_tab_to_right", "New tab to the right", kTabs},
++    {IDC_CLOSE_TAB, "close_tab", "Close tab", kTabs},
++    {IDC_RESTORE_TAB, "restore_tab", "Reopen closed tab", kTabs},
++    {IDC_DUPLICATE_TAB, "duplicate_tab", "Duplicate tab", kTabs},
++    {IDC_WINDOW_PIN_TAB, "pin_tab", "Pin or unpin tab", kTabs},
++    {IDC_WINDOW_CLOSE_OTHER_TABS, "close_other_tabs", "Close other tabs",
++     kTabs},
++    {IDC_MOVE_TAB_TO_NEW_WINDOW, "move_tab_to_new_window",
++     "Move tab to a new window", kTabs},
++    {IDC_CYCLE_TO_NEXT_TAB, "cycle_to_next_tab", "Next tab", kTabs},
++    {IDC_CYCLE_TO_PREV_TAB, "cycle_to_prev_tab", "Previous tab", kTabs},
++    {IDC_SELECT_NEXT_TAB, "select_next_tab", "Next tab in the tab strip",
++     kTabs},
++    {IDC_SELECT_PREVIOUS_TAB, "select_previous_tab",
++     "Previous tab in the tab strip", kTabs},
++    {IDC_MOVE_TAB_NEXT, "move_tab_next", "Move tab right", kTabs},
++    {IDC_MOVE_TAB_PREVIOUS, "move_tab_previous", "Move tab left", kTabs},
++    {IDC_SELECT_TAB_0, "select_tab_1", "Switch to tab 1", kTabs},
++    {IDC_SELECT_TAB_1, "select_tab_2", "Switch to tab 2", kTabs},
++    {IDC_SELECT_TAB_2, "select_tab_3", "Switch to tab 3", kTabs},
++    {IDC_SELECT_TAB_3, "select_tab_4", "Switch to tab 4", kTabs},
++    {IDC_SELECT_TAB_4, "select_tab_5", "Switch to tab 5", kTabs},
++    {IDC_SELECT_TAB_5, "select_tab_6", "Switch to tab 6", kTabs},
++    {IDC_SELECT_TAB_6, "select_tab_7", "Switch to tab 7", kTabs},
++    {IDC_SELECT_TAB_7, "select_tab_8", "Switch to tab 8", kTabs},
++    {IDC_SELECT_LAST_TAB, "select_last_tab", "Switch to the last tab", kTabs},
++    {IDC_TAB_SEARCH, "tab_search", "Search tabs", kTabs},
++    {IDC_NEW_SPLIT_TAB, "new_split_tab", "New split view", kTabs},
++    {IDC_TOGGLE_VERTICAL_TABS_COLLAPSE, "toggle_vertical_tabs",
++     "Collapse or expand vertical tabs", kTabs},
++
++    {IDC_CREATE_NEW_TAB_GROUP, "create_tab_group", "New tab group", kTabGroups},
++    {IDC_ADD_NEW_TAB_TO_GROUP, "add_tab_to_group", "New tab in the group",
++     kTabGroups},
++    {IDC_FOCUS_NEXT_TAB_GROUP, "next_tab_group", "Next tab group", kTabGroups},
++    {IDC_FOCUS_PREV_TAB_GROUP, "prev_tab_group", "Previous tab group",
++     kTabGroups},
++    {IDC_CLOSE_TAB_GROUP, "close_tab_group", "Close tab group", kTabGroups},
++
++    {IDC_NEW_WINDOW, "new_window", "New window", kWindows},
++    {IDC_NEW_INCOGNITO_WINDOW, "new_incognito_window", "New Incognito window",
++     kWindows},
++    {IDC_CLOSE_WINDOW, "close_window", "Close window", kWindows},
++    {IDC_FULLSCREEN, "fullscreen", "Full screen", kWindows},
++    {IDC_SHOW_APP_MENU, "show_app_menu", "Open the main menu", kWindows},
++    {IDC_SHOW_AVATAR_MENU, "show_avatar_menu", "Open the profile menu",
++     kWindows},
++    {IDC_EXIT, "exit", "Exit", kWindows},
++
++    {IDC_BACK, "back", "Back", kNavigation},
++    {IDC_FORWARD, "forward", "Forward", kNavigation},
++    {IDC_RELOAD, "reload", "Reload", kNavigation},
++    {IDC_RELOAD_BYPASSING_CACHE, "reload_bypassing_cache",
++     "Reload without the cache", kNavigation},
++    {IDC_HOME, "home", "Home page", kNavigation},
++    {IDC_FOCUS_LOCATION, "focus_location", "Go to the address bar",
++     kNavigation},
++    {IDC_FOCUS_SEARCH, "focus_search", "Search from the address bar",
++     kNavigation},
++    {IDC_OPEN_FILE, "open_file", "Open a file", kNavigation},
++    {IDC_COPY_URL, "copy_url", "Copy the page address", kNavigation},
++
++    {IDC_FIND, "find", "Find in page", kPage},
++    {IDC_FIND_NEXT, "find_next", "Find next", kPage},
++    {IDC_FIND_PREVIOUS, "find_previous", "Find previous", kPage},
++    {IDC_ZOOM_PLUS, "zoom_plus", "Zoom in", kPage},
++    {IDC_ZOOM_MINUS, "zoom_minus", "Zoom out", kPage},
++    {IDC_ZOOM_NORMAL, "zoom_normal", "Reset zoom", kPage},
++    {IDC_PRINT, "print", "Print", kPage},
++    {IDC_BASIC_PRINT, "basic_print", "Print with the system dialog", kPage},
++    {IDC_SAVE_PAGE, "save_page", "Save page", kPage},
++    {IDC_VIEW_SOURCE, "view_source", "View page source", kPage},
++    {IDC_SHOW_READING_MODE_KEYBOARD, "reading_mode", "Reading mode", kPage},
++    {IDC_CARET_BROWSING_TOGGLE, "caret_browsing",
++     "Turn caret browsing on or off", kPage},
++
++    {IDC_BOOKMARK_THIS_TAB, "bookmark_this_tab", "Bookmark this tab",
++     kBookmarks},
++    {IDC_BOOKMARK_ALL_TABS, "bookmark_all_tabs", "Bookmark all tabs",
++     kBookmarks},
++    {IDC_SHOW_BOOKMARK_BAR, "show_bookmark_bar",
++     "Show or hide the bookmarks bar", kBookmarks},
++    {IDC_SHOW_BOOKMARK_MANAGER, "show_bookmark_manager", "Bookmark manager",
++     kBookmarks},
++    {IDC_SHOW_HISTORY, "show_history", "History", kBookmarks},
++    {IDC_SHOW_DOWNLOADS, "show_downloads", "Downloads", kBookmarks},
++    {IDC_CLEAR_BROWSING_DATA, "clear_browsing_data", "Delete browsing data",
++     kBookmarks},
++
++    {IDC_OPTIONS, "options", "Settings", kTools},
++    {IDC_MANAGE_EXTENSIONS, "manage_extensions", "Extensions", kTools},
++    {IDC_TASK_MANAGER_SHORTCUT, "task_manager", "Task manager", kTools},
++    {IDC_DEV_TOOLS, "dev_tools", "Developer tools", kTools},
++    {IDC_DEV_TOOLS_TOGGLE, "dev_tools_toggle", "Open or close developer tools",
++     kTools},
++    {IDC_DEV_TOOLS_CONSOLE, "dev_tools_console", "JavaScript console", kTools},
++    {IDC_DEV_TOOLS_INSPECT, "dev_tools_inspect", "Inspect an element", kTools},
++    {IDC_HELP_PAGE_VIA_KEYBOARD, "help", "Help", kTools},
++
++    {IDC_FOCUS_TOOLBAR, "focus_toolbar", "Focus the toolbar", kFocus},
++    {IDC_FOCUS_BOOKMARKS, "focus_bookmarks", "Focus the bookmarks bar", kFocus},
++    {IDC_FOCUS_MENU_BAR, "focus_menu_bar", "Focus the main menu button",
++     kFocus},
++    {IDC_FOCUS_NEXT_PANE, "focus_next_pane", "Focus the next pane", kFocus},
++    {IDC_FOCUS_PREVIOUS_PANE, "focus_previous_pane", "Focus the previous pane",
++     kFocus},
++    {IDC_FOCUS_WEB_CONTENTS_PANE, "focus_web_contents", "Focus the page",
++     kFocus},
++    {IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY, "focus_inactive_popup",
++     "Focus an open bubble or pop-up", kFocus},
++};
++
++// Windows virtual key codes that have no letter or digit.
++constexpr int kKeyBackspace = 0x08;
++constexpr int kKeyTab = 0x09;
++constexpr int kKeyEnter = 0x0D;
++constexpr int kKeyAlt = 0x12;
++constexpr int kKeyEscape = 0x1B;
++constexpr int kKeySpace = 0x20;
++constexpr int kKeyPageUp = 0x21;
++constexpr int kKeyPageDown = 0x22;
++constexpr int kKeyEnd = 0x23;
++constexpr int kKeyHome = 0x24;
++constexpr int kKeyLeft = 0x25;
++constexpr int kKeyUp = 0x26;
++constexpr int kKeyRight = 0x27;
++constexpr int kKeyDown = 0x28;
++constexpr int kKeyInsert = 0x2D;
++constexpr int kKeyDelete = 0x2E;
++constexpr int kKeyNumpad0 = 0x60;
++constexpr int kKeyNumpad9 = 0x69;
++constexpr int kKeyF1 = 0x70;
++constexpr int kKeyF24 = 0x87;
++constexpr int kKeyLeftAlt = 0xA4;
++constexpr int kKeyRightAlt = 0xA5;
++constexpr int kKeyBrowserSearch = 0xAA;
++
++struct KeyName {
++  int key;
++  const char* name;
++  // False for a key that Chromium uses in a shortcut but the page does not
++  // accept in a new one.
++  bool can_assign;
++};
++
++constexpr KeyName kKeyNames[] = {
++    {kKeyBackspace, "Backspace", true},
++    {kKeyTab, "Tab", true},
++    {kKeyEnter, "Enter", true},
++    {kKeyAlt, "Alt", false},
++    {kKeyEscape, "Esc", true},
++    {kKeySpace, "Space", true},
++    {kKeyPageUp, "Page Up", true},
++    {kKeyPageDown, "Page Down", true},
++    {kKeyEnd, "End", true},
++    {kKeyHome, "Home", true},
++    {kKeyLeft, "Left", true},
++    {kKeyUp, "Up", true},
++    {kKeyRight, "Right", true},
++    {kKeyDown, "Down", true},
++    {kKeyInsert, "Insert", true},
++    {kKeyDelete, "Delete", true},
++    {0x6A, "Numpad *", true},
++    {0x6B, "Numpad Plus", true},
++    {0x6D, "Numpad Minus", true},
++    {0x6E, "Numpad .", true},
++    {0x6F, "Numpad /", true},
++    {kKeyLeftAlt, "Left Alt", false},
++    {kKeyRightAlt, "Right Alt", false},
++    {kKeyBrowserSearch, "Search key", false},
++    // The names of these are those of the US keyboard layout.
++    {0xBA, ";", true},
++    {0xBB, "Plus", true},
++    {0xBC, ",", true},
++    {0xBD, "Minus", true},
++    {0xBE, ".", true},
++    {0xBF, "/", true},
++    {0xC0, "`", true},
++    {0xDB, "[", true},
++    {0xDC, "\\", true},
++    {0xDD, "]", true},
++    {0xDE, "'", true},
++};
++
++bool IsLetterOrDigit(int key) {
++  return (key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9');
++}
++
++bool IsFunctionKey(int key) {
++  return key >= kKeyF1 && key <= kKeyF24;
++}
++
++bool IsNumpadDigit(int key) {
++  return key >= kKeyNumpad0 && key <= kKeyNumpad9;
++}
++
++const KeyName* FindKeyName(int key) {
++  for (const KeyName& entry : kKeyNames) {
++    if (entry.key == key) {
++      return &entry;
++    }
++  }
++  return nullptr;
++}
++
++std::string KeyText(int key) {
++  if (IsLetterOrDigit(key)) {
++    return std::string(1, static_cast<char>(key));
++  }
++  if (IsFunctionKey(key)) {
++    return "F" + std::to_string(key - kKeyF1 + 1);
++  }
++  if (IsNumpadDigit(key)) {
++    return "Numpad " + std::to_string(key - kKeyNumpad0);
++  }
++  if (const KeyName* entry = FindKeyName(key)) {
++    return entry->name;
++  }
++  return "Key " + std::to_string(key);
++}
++
++bool CanAssignKey(int key) {
++  if (IsLetterOrDigit(key) || IsFunctionKey(key) || IsNumpadDigit(key)) {
++    return true;
++  }
++  const KeyName* entry = FindKeyName(key);
++  return entry && entry->can_assign;
++}
++
++// True for the shortcuts of text fields: copy and paste, undo, select all,
++// and moving or deleting by word. A browser command on one of these would
++// take the key away from the text field.
++bool IsEditingShortcut(int shortcut) {
++  const int key = ShortcutKey(shortcut);
++  const int modifiers = ShortcutModifiers(shortcut);
++  if (modifiers == kShortcutCtrl) {
++    switch (key) {
++      case 'A':
++      case 'C':
++      case 'V':
++      case 'X':
++      case 'Y':
++      case 'Z':
++      case kKeyBackspace:
++      case kKeyDelete:
++      case kKeyInsert:
++        return true;
++    }
++  }
++  if (modifiers == (kShortcutCtrl | kShortcutShift) &&
++      (key == 'V' || key == 'Z')) {
++    return true;
++  }
++  if (modifiers == kShortcutCtrl ||
++      modifiers == (kShortcutCtrl | kShortcutShift)) {
++    switch (key) {
++      case kKeyLeft:
++      case kKeyRight:
++      case kKeyUp:
++      case kKeyDown:
++      case kKeyHome:
++      case kKeyEnd:
++        return true;
++    }
++  }
++  return false;
++}
++
++// True for the shortcuts Windows handles before the browser sees them.
++bool IsWindowsShortcut(int shortcut) {
++  const int key = ShortcutKey(shortcut);
++  const int modifiers = ShortcutModifiers(shortcut);
++  if (modifiers == kShortcutAlt ||
++      modifiers == (kShortcutAlt | kShortcutShift)) {
++    return key == kKeyTab || key == kKeyEscape || key == kKeySpace;
++  }
++  if (modifiers == kShortcutCtrl ||
++      modifiers == (kShortcutCtrl | kShortcutShift)) {
++    return key == kKeyEscape;
++  }
++  if (modifiers == (kShortcutCtrl | kShortcutAlt)) {
++    return key == kKeyDelete;
++  }
++  return false;
++}
++
++std::vector<int> DefaultsOf(const std::vector<ShortcutBinding>& defaults,
++                            int command_id) {
++  std::vector<int> result;
++  for (const ShortcutBinding& binding : defaults) {
++    if (binding.command_id == command_id) {
++      result.push_back(binding.shortcut);
++    }
++  }
++  return result;
++}
++
++// The command the user gave `shortcut` to, or nullptr.
++const ShortcutCommand* UserOwner(const ShortcutOverrides& overrides,
++                                 int shortcut) {
++  for (const auto& [command_id, shortcuts] : overrides) {
++    for (int entry : shortcuts) {
++      if (entry == shortcut) {
++        return FindShortcutCommandById(command_id);
++      }
++    }
++  }
++  return nullptr;
++}
++
++// The shortcuts `command_id` has now.
++std::vector<int> CurrentOf(const std::vector<ShortcutBinding>& defaults,
++                           const ShortcutOverrides& overrides,
++                           int command_id) {
++  std::vector<int> result;
++  for (const ShortcutBinding& binding :
++       EffectiveShortcuts(defaults, overrides)) {
++    if (binding.command_id == command_id) {
++      result.push_back(binding.shortcut);
++    }
++  }
++  return result;
++}
++
++void EraseShortcut(std::vector<int>* shortcuts, int shortcut) {
++  for (auto it = shortcuts->begin(); it != shortcuts->end();) {
++    if (*it == shortcut) {
++      it = shortcuts->erase(it);
++    } else {
++      ++it;
++    }
++  }
++}
++
++// Stores `shortcuts` as the user's list for `command_id`. A list equal to
++// the command's original shortcuts is not stored: the command then counts as
++// unchanged.
++void StoreShortcuts(const std::vector<ShortcutBinding>& defaults,
++                    ShortcutOverrides* overrides,
++                    int command_id,
++                    std::vector<int> shortcuts) {
++  if (shortcuts == DefaultsOf(defaults, command_id)) {
++    overrides->erase(command_id);
++  } else {
++    (*overrides)[command_id] = std::move(shortcuts);
++  }
++}
++
++std::string JsonString(std::string_view text) {
++  std::string result = "\"";
++  for (char c : text) {
++    if (c == '"' || c == '\\') {
++      result += '\\';
++    }
++    result += c;
++  }
++  result += '"';
++  return result;
++}
++
++}  // namespace
++
++const ShortcutCommand* FindShortcutCommand(std::string_view name) {
++  for (const ShortcutCommand& command : kCommands) {
++    if (name == command.name) {
++      return &command;
++    }
++  }
++  return nullptr;
++}
++
++const ShortcutCommand* FindShortcutCommandById(int command_id) {
++  for (const ShortcutCommand& command : kCommands) {
++    if (command.id == command_id) {
++      return &command;
++    }
++  }
++  return nullptr;
++}
++
++bool IsStoredShortcut(int shortcut) {
++  return shortcut > 0 && ShortcutKey(shortcut) != 0 &&
++         ShortcutModifiers(shortcut) <=
++             (kShortcutCtrl | kShortcutShift | kShortcutAlt | kShortcutAltGr);
++}
++
++std::string ShortcutText(int shortcut) {
++  const int modifiers = ShortcutModifiers(shortcut);
++  std::string text;
++  if (modifiers & kShortcutCtrl) {
++    text += "Ctrl+";
++  }
++  if (modifiers & kShortcutAlt) {
++    text += "Alt+";
++  }
++  if (modifiers & kShortcutAltGr) {
++    text += "AltGr+";
++  }
++  if (modifiers & kShortcutShift) {
++    text += "Shift+";
++  }
++  return text + KeyText(ShortcutKey(shortcut));
++}
++
++void SanitizeShortcutOverrides(ShortcutOverrides* overrides) {
++  std::set<int> seen;
++  for (auto it = overrides->begin(); it != overrides->end();) {
++    if (!FindShortcutCommandById(it->first)) {
++      it = overrides->erase(it);
++      continue;
++    }
++    std::vector<int> kept;
++    for (int shortcut : it->second) {
++      if (IsStoredShortcut(shortcut) && seen.insert(shortcut).second) {
++        kept.push_back(shortcut);
++      }
++    }
++    it->second = std::move(kept);
++    ++it;
++  }
++}
++
++std::vector<ShortcutBinding> EffectiveShortcuts(
++    const std::vector<ShortcutBinding>& defaults,
++    const ShortcutOverrides& overrides) {
++  std::set<int> taken;
++  for (const auto& [command_id, shortcuts] : overrides) {
++    taken.insert(shortcuts.begin(), shortcuts.end());
++  }
++  std::vector<ShortcutBinding> result;
++  for (const ShortcutBinding& binding : defaults) {
++    if (!overrides.contains(binding.command_id) &&
++        !taken.contains(binding.shortcut)) {
++      result.push_back(binding);
++    }
++  }
++  for (const auto& [command_id, shortcuts] : overrides) {
++    for (int shortcut : shortcuts) {
++      result.push_back({shortcut, command_id});
++    }
++  }
++  return result;
++}
++
++ShortcutChange AddShortcut(const std::vector<ShortcutBinding>& defaults,
++                           ShortcutOverrides* overrides,
++                           int command_id,
++                           int shortcut,
++                           bool take_over) {
++  ShortcutChange change;
++  change.result = ShortcutResult::kError;
++  if (!FindShortcutCommandById(command_id)) {
++    change.message = "This command is not known.";
++    return change;
++  }
++  const int key = ShortcutKey(shortcut);
++  const int modifiers = ShortcutModifiers(shortcut);
++  if (!IsStoredShortcut(shortcut) || (modifiers & kShortcutAltGr) ||
++      !CanAssignKey(key)) {
++    change.message = "This key cannot be used in a shortcut.";
++    return change;
++  }
++  const std::string text = ShortcutText(shortcut);
++  if (!(modifiers & (kShortcutCtrl | kShortcutAlt)) && !IsFunctionKey(key)) {
++    change.message = text +
++                     " cannot be used. A shortcut needs Ctrl or Alt, unless "
++                     "it is a function key.";
++    return change;
++  }
++  if (IsEditingShortcut(shortcut)) {
++    change.message = text + " is used for editing text and cannot be changed.";
++    return change;
++  }
++  if (IsWindowsShortcut(shortcut)) {
++    change.message = text + " is used by Windows.";
++    return change;
++  }
++
++  std::vector<int> shortcuts = CurrentOf(defaults, *overrides, command_id);
++  for (int entry : shortcuts) {
++    if (entry == shortcut) {
++      change.result = ShortcutResult::kOk;
++      return change;
++    }
++  }
++
++  for (const ShortcutBinding& binding :
++       EffectiveShortcuts(defaults, *overrides)) {
++    if (binding.shortcut != shortcut) {
++      continue;
++    }
++    const ShortcutCommand* owner = FindShortcutCommandById(binding.command_id);
++    if (!owner) {
++      change.message =
++          text + " belongs to a built-in function that cannot be changed.";
++      return change;
++    }
++    if (!take_over) {
++      change.result = ShortcutResult::kConflict;
++      change.owner = owner->label;
++      return change;
++    }
++    auto it = overrides->find(owner->id);
++    if (it != overrides->end()) {
++      std::vector<int> owner_shortcuts = it->second;
++      EraseShortcut(&owner_shortcuts, shortcut);
++      StoreShortcuts(defaults, overrides, owner->id,
++                     std::move(owner_shortcuts));
++    }
++    // An owner without a list of its own loses the shortcut because the
++    // user's list below now has it.
++  }
++
++  shortcuts.push_back(shortcut);
++  StoreShortcuts(defaults, overrides, command_id, std::move(shortcuts));
++  change.result = ShortcutResult::kOk;
++  return change;
++}
++
++void RemoveShortcut(const std::vector<ShortcutBinding>& defaults,
++                    ShortcutOverrides* overrides,
++                    int command_id,
++                    int shortcut) {
++  if (!FindShortcutCommandById(command_id)) {
++    return;
++  }
++  std::vector<int> shortcuts = CurrentOf(defaults, *overrides, command_id);
++  EraseShortcut(&shortcuts, shortcut);
++  StoreShortcuts(defaults, overrides, command_id, std::move(shortcuts));
++}
++
++void ResetShortcuts(ShortcutOverrides* overrides, int command_id) {
++  overrides->erase(command_id);
++}
++
++void MergeShortcutOverrides(const std::vector<ShortcutBinding>& defaults,
++                            ShortcutOverrides* overrides,
++                            const ShortcutOverrides& incoming) {
++  for (const auto& [command_id, shortcuts] : incoming) {
++    if (!FindShortcutCommandById(command_id)) {
++      continue;
++    }
++    // Take the incoming shortcuts away from the commands the user gave them
++    // to.
++    std::vector<int> owners;
++    for (const auto& [owner_id, owner_shortcuts] : *overrides) {
++      if (owner_id != command_id) {
++        owners.push_back(owner_id);
++      }
++    }
++    for (int owner_id : owners) {
++      std::vector<int> owner_shortcuts = (*overrides)[owner_id];
++      const size_t size_before = owner_shortcuts.size();
++      for (int shortcut : shortcuts) {
++        EraseShortcut(&owner_shortcuts, shortcut);
++      }
++      if (owner_shortcuts.size() != size_before) {
++        StoreShortcuts(defaults, overrides, owner_id,
++                       std::move(owner_shortcuts));
++      }
++    }
++    StoreShortcuts(defaults, overrides, command_id, shortcuts);
++  }
++  SanitizeShortcutOverrides(overrides);
++}
++
++std::string ShortcutStateJson(const std::vector<ShortcutBinding>& defaults,
++                              const ShortcutOverrides& overrides) {
++  std::string json = "{\"custom\":";
++  json += overrides.empty() ? "false" : "true";
++  json += ",\"sections\":[";
++  const char* section = nullptr;
++  bool first_command = true;
++  for (const ShortcutCommand& command : kCommands) {
++    if (command.section != section) {
++      if (section) {
++        json += "]},";
++      }
++      section = command.section;
++      json += "{\"title\":" + JsonString(section) + ",\"commands\":[";
++      first_command = true;
++    }
++    if (!first_command) {
++      json += ",";
++    }
++    first_command = false;
++
++    const std::vector<int> original = DefaultsOf(defaults, command.id);
++    const std::vector<int> current = CurrentOf(defaults, overrides, command.id);
++    const bool custom = overrides.contains(command.id);
++    json += "{\"id\":" + JsonString(command.name) +
++            ",\"label\":" + JsonString(command.label) +
++            ",\"custom\":" + (custom ? "true" : "false") +
++            ",\"changed\":" + (current != original ? "true" : "false") +
++            ",\"shortcuts\":[";
++    for (size_t i = 0; i < current.size(); ++i) {
++      json += std::string(i ? "," : "") +
++              "{\"k\":" + std::to_string(current[i]) +
++              ",\"text\":" + JsonString(ShortcutText(current[i])) + "}";
++    }
++    // Original shortcuts that another command has now.
++    json += "],\"lost\":[";
++    bool first_lost = true;
++    if (!custom) {
++      for (int shortcut : original) {
++        const ShortcutCommand* owner = UserOwner(overrides, shortcut);
++        if (!owner) {
++          continue;
++        }
++        json += std::string(first_lost ? "" : ",") +
++                "{\"text\":" + JsonString(ShortcutText(shortcut)) +
++                ",\"by\":" + JsonString(owner->label) + "}";
++        first_lost = false;
++      }
++    }
++    json += "]}";
++  }
++  if (section) {
++    json += "]}";
++  }
++  json += "]}";
++  return json;
++}
++
++std::string ShortcutResponseJson(const ShortcutChange& change,
++                                 int shortcut,
++                                 const std::vector<ShortcutBinding>& defaults,
++                                 const ShortcutOverrides& overrides) {
++  std::string json = "{\"status\":";
++  switch (change.result) {
++    case ShortcutResult::kOk:
++      json += "\"ok\"";
++      break;
++    case ShortcutResult::kError:
++      json += "\"error\",\"message\":" + JsonString(change.message);
++      break;
++    case ShortcutResult::kConflict:
++      json += "\"conflict\",\"k\":" + std::to_string(shortcut) +
++              ",\"text\":" + JsonString(ShortcutText(shortcut)) +
++              ",\"owner\":" + JsonString(change.owner);
++      break;
++  }
++  json += ",\"state\":" + ShortcutStateJson(defaults, overrides) + "}";
++  return json;
++}
++
++}  // namespace yatesium
+diff --git a/chrome/browser/yatesium_shortcut_table.h b/chrome/browser/yatesium_shortcut_table.h
+new file mode 100644
+index 00000000..8823f60f
+--- /dev/null
++++ b/chrome/browser/yatesium_shortcut_table.h
+@@ -0,0 +1,126 @@
++// Yatesium: the data behind the keyboard shortcuts page.
++//
++// This file and its .cc use only the C++ standard library and the command
++// ids. The part that talks to the browser is in yatesium_shortcuts.cc.
++//
++// A shortcut is stored as one int: the modifier bits shifted left by 8, plus
++// the Windows virtual key code. The user's changes are a map from a command
++// to the complete list of shortcuts that command now has. A command that is
++// not in the map keeps the shortcuts Chromium gives it, except those the user
++// gave to another command.
++
++#ifndef CHROME_BROWSER_YATESIUM_SHORTCUT_TABLE_H_
++#define CHROME_BROWSER_YATESIUM_SHORTCUT_TABLE_H_
++
++#include <map>
++#include <string>
++#include <string_view>
++#include <vector>
++
++namespace yatesium {
++
++inline constexpr int kShortcutCtrl = 1;
++inline constexpr int kShortcutShift = 2;
++inline constexpr int kShortcutAlt = 4;
++inline constexpr int kShortcutAltGr = 8;
++
++constexpr int MakeShortcut(int modifiers, int key) {
++  return (modifiers << 8) | key;
++}
++constexpr int ShortcutKey(int shortcut) {
++  return shortcut & 0xFF;
++}
++constexpr int ShortcutModifiers(int shortcut) {
++  return shortcut >> 8;
++}
++
++// One shortcut and the command (IDC_...) it runs.
++struct ShortcutBinding {
++  int shortcut;
++  int command_id;
++};
++
++// Command id to the shortcuts the user chose for it.
++using ShortcutOverrides = std::map<int, std::vector<int>>;
++
++// A command the page offers.
++struct ShortcutCommand {
++  int id;
++  // Name used in the stored settings and in the page's requests.
++  const char* name;
++  // Text shown on the page.
++  const char* label;
++  // Heading the command is listed under.
++  const char* section;
++};
++
++const ShortcutCommand* FindShortcutCommand(std::string_view name);
++const ShortcutCommand* FindShortcutCommandById(int command_id);
++
++// True if `shortcut` has a key code and modifier bits in the stored range.
++bool IsStoredShortcut(int shortcut);
++
++// "Ctrl+Shift+T".
++std::string ShortcutText(int shortcut);
++
++// Removes entries that cannot be used: commands the page does not offer,
++// values out of range, and a shortcut listed a second time.
++void SanitizeShortcutOverrides(ShortcutOverrides* overrides);
++
++// The shortcuts in effect: `defaults` with the user's changes applied.
++std::vector<ShortcutBinding> EffectiveShortcuts(
++    const std::vector<ShortcutBinding>& defaults,
++    const ShortcutOverrides& overrides);
++
++enum class ShortcutResult {
++  kOk,
++  // Refused. `message` says why.
++  kError,
++  // The shortcut belongs to another command. `owner` is that command's label.
++  kConflict,
++};
++
++struct ShortcutChange {
++  ShortcutResult result = ShortcutResult::kOk;
++  std::string message;
++  std::string owner;
++};
++
++// Gives `shortcut` to `command_id`. If another command has it, the result is
++// kConflict and nothing changes, unless `take_over` is true.
++ShortcutChange AddShortcut(const std::vector<ShortcutBinding>& defaults,
++                           ShortcutOverrides* overrides,
++                           int command_id,
++                           int shortcut,
++                           bool take_over);
++
++void RemoveShortcut(const std::vector<ShortcutBinding>& defaults,
++                    ShortcutOverrides* overrides,
++                    int command_id,
++                    int shortcut);
++
++// Gives `command_id` its original shortcuts back, apart from those the user
++// gave to another command.
++void ResetShortcuts(ShortcutOverrides* overrides, int command_id);
++
++// Applies the changes of a settings file. Each command in `incoming` gets
++// the shortcuts listed there, and another command that had one of them loses
++// it. Commands that are not in `incoming` keep what they have.
++void MergeShortcutOverrides(const std::vector<ShortcutBinding>& defaults,
++                            ShortcutOverrides* overrides,
++                            const ShortcutOverrides& incoming);
++
++// What the page shows, as JSON.
++std::string ShortcutStateJson(const std::vector<ShortcutBinding>& defaults,
++                              const ShortcutOverrides& overrides);
++
++// The answer to a request of the page: the outcome of `change` for
++// `shortcut`, and the state after it.
++std::string ShortcutResponseJson(const ShortcutChange& change,
++                                 int shortcut,
++                                 const std::vector<ShortcutBinding>& defaults,
++                                 const ShortcutOverrides& overrides);
++
++}  // namespace yatesium
++
++#endif  // CHROME_BROWSER_YATESIUM_SHORTCUT_TABLE_H_
+diff --git a/chrome/browser/yatesium_shortcuts.cc b/chrome/browser/yatesium_shortcuts.cc
+new file mode 100644
+index 00000000..af531d56
+--- /dev/null
++++ b/chrome/browser/yatesium_shortcuts.cc
+@@ -0,0 +1,936 @@
++// Yatesium: the keyboard shortcuts page. See yatesium_shortcuts.h.
++//
++// How it works: Chromium builds its list of shortcuts once and every browser
++// window copies it. A filter installed here rewrites that list with the
++// user's changes (see accelerator_table.h). When the page changes something,
++// the list is built again and every window loads it again.
++//
++// The page is HTML with a script, both served from here. The script sends
++// each change as a request to this page's own address ("add?...",
++// "remove?...", "reset?...", "resetall?...") and gets the new state back as
++// JSON. The rules for what a change does are in yatesium_shortcut_table.cc.
++
++#include "chrome/browser/yatesium_shortcuts.h"
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/memory/ref_counted_memory.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/unguessable_token.h"
++#include "base/values.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/accelerator_table.h"
++#include "chrome/browser/yatesium_shortcut_table.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/url_data_source.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_ui.h"
++#include "content/public/common/url_constants.h"
++#include "net/base/url_util.h"
++#include "ui/events/event_constants.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "url/gurl.h"
++
++namespace yatesium {
++
++namespace {
++
++// Local State: a dictionary from a command's name to the list of its
++// shortcuts. Only commands the user changed are in it.
++constexpr char kShortcutsPref[] = "yatesium.shortcuts";
++
++// The modifier flags a stored shortcut can express.
++constexpr int kKnownFlags = ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN |
++                            ui::EF_ALT_DOWN | ui::EF_ALTGR_DOWN;
++
++// Chromium's own shortcuts, as of the last time the list was built.
++std::vector<ShortcutBinding>& DefaultBindings() {
++  static base::NoDestructor<std::vector<ShortcutBinding>> bindings;
++  return *bindings;
++}
++
++// Returns nothing for a mapping that a stored shortcut cannot express. Such
++// a mapping is left as it is.
++std::optional<int> ToShortcut(const AcceleratorMapping& mapping) {
++  const int key = static_cast<int>(mapping.keycode);
++  if ((mapping.modifiers & ~kKnownFlags) || key <= 0 || key > 0xFF) {
++    return std::nullopt;
++  }
++  int modifiers = 0;
++  if (mapping.modifiers & ui::EF_CONTROL_DOWN) {
++    modifiers |= kShortcutCtrl;
++  }
++  if (mapping.modifiers & ui::EF_SHIFT_DOWN) {
++    modifiers |= kShortcutShift;
++  }
++  if (mapping.modifiers & ui::EF_ALT_DOWN) {
++    modifiers |= kShortcutAlt;
++  }
++  if (mapping.modifiers & ui::EF_ALTGR_DOWN) {
++    modifiers |= kShortcutAltGr;
++  }
++  return MakeShortcut(modifiers, key);
++}
++
++AcceleratorMapping ToMapping(const ShortcutBinding& binding) {
++  const int modifiers = ShortcutModifiers(binding.shortcut);
++  int flags = ui::EF_NONE;
++  if (modifiers & kShortcutCtrl) {
++    flags |= ui::EF_CONTROL_DOWN;
++  }
++  if (modifiers & kShortcutShift) {
++    flags |= ui::EF_SHIFT_DOWN;
++  }
++  if (modifiers & kShortcutAlt) {
++    flags |= ui::EF_ALT_DOWN;
++  }
++  if (modifiers & kShortcutAltGr) {
++    flags |= ui::EF_ALTGR_DOWN;
++  }
++  return AcceleratorMapping{
++      static_cast<ui::KeyboardCode>(ShortcutKey(binding.shortcut)), flags,
++      binding.command_id, std::nullopt};
++}
++
++PrefService* LocalState() {
++  return g_browser_process ? g_browser_process->local_state() : nullptr;
++}
++
++// The stored form of the user's changes: a dictionary from a command's name
++// to the list of its shortcuts. Local State and a settings file both use it.
++ShortcutOverrides OverridesFromDict(const base::DictValue& dict) {
++  ShortcutOverrides overrides;
++  for (const auto item : dict) {
++    const ShortcutCommand* command = FindShortcutCommand(item.first);
++    if (!command || !item.second.is_list()) {
++      continue;
++    }
++    std::vector<int>& shortcuts = overrides[command->id];
++    for (const base::Value& entry : item.second.GetList()) {
++      if (entry.is_int()) {
++        shortcuts.push_back(entry.GetInt());
++      }
++    }
++  }
++  SanitizeShortcutOverrides(&overrides);
++  return overrides;
++}
++
++base::DictValue OverridesToDict(const ShortcutOverrides& overrides) {
++  base::DictValue dict;
++  for (const auto& [command_id, shortcuts] : overrides) {
++    const ShortcutCommand* command = FindShortcutCommandById(command_id);
++    if (!command) {
++      continue;
++    }
++    base::ListValue list;
++    for (int shortcut : shortcuts) {
++      list.Append(shortcut);
++    }
++    dict.Set(command->name, std::move(list));
++  }
++  return dict;
++}
++
++ShortcutOverrides LoadOverrides() {
++  PrefService* local_state = LocalState();
++  if (!local_state) {
++    return ShortcutOverrides();
++  }
++  return OverridesFromDict(local_state->GetDict(kShortcutsPref));
++}
++
++void SaveOverrides(const ShortcutOverrides& overrides) {
++  PrefService* local_state = LocalState();
++  if (!local_state) {
++    return;
++  }
++  local_state->SetDict(kShortcutsPref, OverridesToDict(overrides));
++}
++
++// The key of a settings file's shortcuts, next to "format".
++constexpr char kJsonShortcutsKey[] = "shortcuts";
++
++// Reads what ExportShortcutsJson() writes.
++std::optional<ShortcutOverrides> OverridesFromJson(const std::string& json) {
++  std::optional<base::DictValue> root =
++      base::JSONReader::ReadDict(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
++  const base::DictValue* dict =
++      root ? root->FindDict(kJsonShortcutsKey) : nullptr;
++  if (!dict) {
++    return std::nullopt;
++  }
++  return OverridesFromDict(*dict);
++}
++
++// The filter of the accelerator list. `list` arrives with Chromium's own
++// shortcuts and leaves with the ones in effect.
++void FilterAcceleratorList(std::vector<AcceleratorMapping>* list) {
++  std::vector<AcceleratorMapping> result;
++  std::vector<ShortcutBinding> defaults;
++  for (const AcceleratorMapping& mapping : *list) {
++    if (std::optional<int> shortcut = ToShortcut(mapping)) {
++      defaults.push_back({*shortcut, mapping.command_id});
++    } else {
++      result.push_back(mapping);
++    }
++  }
++  for (const ShortcutBinding& binding :
++       EffectiveShortcuts(defaults, LoadOverrides())) {
++    result.push_back(ToMapping(binding));
++  }
++  DefaultBindings() = std::move(defaults);
++  *list = std::move(result);
++}
++
++// The look of the page. Served as "style.css".
++constexpr char kStyleSheet[] = R"css(
++:root {
++  color-scheme: light dark;
++  --bg: #f6f7f9;
++  --card: #ffffff;
++  --text: #1f2328;
++  --muted: #5f6b7a;
++  --line: #dfe3e8;
++  --accent: #1a73e8;
++  --accent-text: #ffffff;
++  --danger: #c5221f;
++  --chip: #eef1f5;
++}
++@media (prefers-color-scheme: dark) {
++  :root {
++    --bg: #1b1d21;
++    --card: #25282d;
++    --text: #e6e8eb;
++    --muted: #9aa4b2;
++    --line: #3a3f46;
++    --accent: #8ab4f8;
++    --accent-text: #11151a;
++    --danger: #f28b82;
++    --chip: #33383f;
++  }
++}
++* { box-sizing: border-box; }
++[hidden] { display: none !important; }
++body {
++  margin: 0;
++  background: var(--bg);
++  color: var(--text);
++  font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
++}
++main { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
++h1 { font-size: 24px; font-weight: 600; margin: 0 0 12px; }
++h2 { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
++p { margin: 8px 0; }
++.card {
++  background: var(--card);
++  border: 1px solid var(--line);
++  border-radius: 12px;
++  padding: 16px 22px;
++  margin: 0 0 16px;
++}
++.muted { color: var(--muted); }
++.error { color: var(--danger); }
++.bar { display: flex; gap: 10px; margin: 16px 0; }
++#filter {
++  flex: 1;
++  font: inherit;
++  padding: 8px 12px;
++  border-radius: 8px;
++  border: 1px solid var(--line);
++  background: var(--card);
++  color: var(--text);
++}
++.row {
++  display: grid;
++  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
++  gap: 4px 16px;
++  align-items: center;
++  padding: 8px 0;
++  border-top: 1px solid var(--line);
++}
++h2 + .row { border-top: 0; }
++.keys { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
++.note { grid-column: 2; }
++.note .button { margin-left: 6px; }
++.tag {
++  margin-left: 8px;
++  padding: 1px 6px;
++  border: 1px solid var(--line);
++  border-radius: 6px;
++  font-size: 12px;
++  color: var(--muted);
++}
++.chip {
++  display: inline-flex;
++  align-items: center;
++  background: var(--chip);
++  border-radius: 6px;
++  padding-left: 8px;
++}
++kbd { font: inherit; font-weight: 600; white-space: nowrap; }
++.remove {
++  font: inherit;
++  line-height: 1;
++  padding: 6px 8px;
++  border: 0;
++  border-radius: 6px;
++  background: transparent;
++  color: var(--muted);
++  cursor: pointer;
++}
++.remove:hover { color: var(--danger); }
++.button {
++  display: inline-block;
++  font: inherit;
++  font-weight: 600;
++  padding: 8px 16px;
++  border-radius: 8px;
++  border: 1px solid var(--line);
++  background: transparent;
++  color: var(--accent);
++  cursor: pointer;
++}
++.button:hover { border-color: var(--accent); }
++.button:disabled {
++  color: var(--muted);
++  border-color: var(--line);
++  cursor: default;
++}
++.button.small { padding: 3px 10px; font-weight: 400; }
++.button.danger {
++  background: var(--danger);
++  border-color: var(--danger);
++  color: var(--accent-text);
++}
++.capture {
++  font: inherit;
++  padding: 3px 10px;
++  border-radius: 8px;
++  border: 1px solid var(--accent);
++  background: var(--accent);
++  color: var(--accent-text);
++}
++button:focus-visible, #filter:focus-visible {
++  outline: 2px solid var(--accent);
++  outline-offset: 2px;
++}
++)css";
++
++// The script of the page. Served as "shortcuts.js". It builds the list from
++// the state it is given and never sets HTML from text.
++constexpr char kScript[] = R"js(
++(function() {
++  'use strict';
++
++  const token = document.body.dataset.token;
++  const list = document.getElementById('list');
++  const filter = document.getElementById('filter');
++  const notice = document.getElementById('notice');
++  const resetAll = document.getElementById('reset-all');
++
++  // What the browser last reported.
++  let state = null;
++  // Name of the command whose new shortcut is being recorded.
++  let recording = null;
++  // {id, k, text, owner}: a shortcut that another command has, waiting for
++  // the user to decide.
++  let conflict = null;
++  // {id, text}: why the last change to a command was refused.
++  let refusal = null;
++  let confirmingResetAll = false;
++  let waiting = false;
++
++  function element(tag, className, text) {
++    const node = document.createElement(tag);
++    if (className) {
++      node.className = className;
++    }
++    if (text) {
++      node.textContent = text;
++    }
++    return node;
++  }
++
++  function button(className, text, label, onClick) {
++    const node = element('button', className, text);
++    node.type = 'button';
++    if (label) {
++      node.setAttribute('aria-label', label);
++    }
++    node.addEventListener('click', onClick);
++    return node;
++  }
++
++  function focusById(id) {
++    const node = document.getElementById(id);
++    if (node) {
++      node.focus();
++    }
++  }
++
++  function showNotice(text) {
++    notice.textContent = text;
++    notice.hidden = !text;
++  }
++
++  // Sends one request to the browser. `done` gets the parsed answer.
++  // XMLHttpRequest is used because pages on the browser's own address may
++  // not use fetch().
++  function send(path, params, done) {
++    if (waiting) {
++      return;
++    }
++    waiting = true;
++    let query = 't=' + encodeURIComponent(token) + '&n=' + Date.now();
++    Object.keys(params).forEach(function(key) {
++      query += '&' + key + '=' + encodeURIComponent(params[key]);
++    });
++    function fail() {
++      waiting = false;
++      showNotice('The browser did not answer. Reload this page.');
++      render();
++    }
++    const request = new XMLHttpRequest();
++    request.open('GET', path + '?' + query);
++    request.onload = function() {
++      let data = null;
++      try {
++        data = JSON.parse(request.responseText);
++      } catch (error) {
++        fail();
++        return;
++      }
++      waiting = false;
++      if (!data || !data.state) {
++        showNotice(
++            data && data.message ? data.message :
++                                   'The browser did not answer. Reload this ' +
++                                       'page.');
++        render();
++        return;
++      }
++      showNotice('');
++      state = data.state;
++      done(data);
++    };
++    request.onerror = fail;
++    request.ontimeout = fail;
++    request.timeout = 5000;
++    try {
++      request.send();
++    } catch (error) {
++      fail();
++    }
++  }
++
++  function clearRowState() {
++    recording = null;
++    conflict = null;
++    refusal = null;
++    confirmingResetAll = false;
++  }
++
++  function startRecording(id) {
++    clearRowState();
++    recording = id;
++    render();
++    focusById('capture');
++  }
++
++  function stopRecording(id) {
++    if (recording !== id) {
++      return;
++    }
++    recording = null;
++    render();
++    focusById('add-' + id);
++  }
++
++  function addShortcut(id, k, takeOver) {
++    clearRowState();
++    send('add', {c: id, k: k, f: takeOver ? 1 : 0}, function(data) {
++      if (data.status === 'conflict') {
++        conflict = {id: id, k: data.k, text: data.text, owner: data.owner};
++      } else if (data.status === 'error') {
++        refusal = {id: id, text: data.message};
++      }
++      render();
++      focusById(conflict ? 'take-over' : 'add-' + id);
++    });
++  }
++
++  function removeShortcut(id, k) {
++    clearRowState();
++    send('remove', {c: id, k: k}, function() {
++      render();
++      focusById('add-' + id);
++    });
++  }
++
++  function resetCommand(id) {
++    clearRowState();
++    send('reset', {c: id}, function() {
++      render();
++      focusById('add-' + id);
++    });
++  }
++
++  function buildAddButton(command) {
++    const add = button(
++        'button small', 'Add', 'Add a shortcut for ' + command.label,
++        function() {
++          startRecording(command.id);
++        });
++    add.id = 'add-' + command.id;
++    return add;
++  }
++
++  function buildRow(command) {
++    const row = element('div', 'row');
++    const name = element('div', 'name', command.label);
++    if (command.changed) {
++      name.appendChild(element('span', 'tag', 'Changed'));
++    }
++    row.appendChild(name);
++
++    const keys = element('div', 'keys');
++    command.shortcuts.forEach(function(shortcut) {
++      const chip = element('span', 'chip');
++      chip.appendChild(element('kbd', '', shortcut.text));
++      const remove = button(
++          'remove', '×',
++          'Remove ' + shortcut.text + ' from ' + command.label, function() {
++            removeShortcut(command.id, shortcut.k);
++          });
++      remove.title = 'Remove';
++      chip.appendChild(remove);
++      keys.appendChild(chip);
++    });
++    if (!command.shortcuts.length) {
++      keys.appendChild(element('span', 'muted', 'No shortcut'));
++    }
++    if (recording === command.id) {
++      const capture = button(
++          'capture', 'Press the new shortcut. Esc cancels.', '', function() {});
++      capture.id = 'capture';
++      // Leaving the box ends the recording. Only the box is replaced, so
++      // that a click on another control still reaches that control.
++      capture.addEventListener('blur', function() {
++        if (recording === command.id) {
++          recording = null;
++          capture.replaceWith(buildAddButton(command));
++        }
++      });
++      keys.appendChild(capture);
++    } else {
++      keys.appendChild(buildAddButton(command));
++    }
++    if (command.custom) {
++      keys.appendChild(button(
++          'button small', 'Reset',
++          'Reset the shortcuts of ' + command.label, function() {
++            resetCommand(command.id);
++          }));
++    }
++    row.appendChild(keys);
++
++    command.lost.forEach(function(lost) {
++      row.appendChild(element(
++          'div', 'note muted', lost.text + ' is now used by ' + lost.by + '.'));
++    });
++    if (refusal && refusal.id === command.id) {
++      const note = element('div', 'note error', refusal.text);
++      note.setAttribute('role', 'alert');
++      row.appendChild(note);
++    }
++    if (conflict && conflict.id === command.id) {
++      const note = element(
++          'div', 'note',
++          conflict.text + ' is used by ' + conflict.owner + '. ');
++      note.setAttribute('role', 'alert');
++      const takeOver = button('button small', 'Move it here', '', function() {
++        addShortcut(command.id, conflict.k, true);
++      });
++      takeOver.id = 'take-over';
++      note.appendChild(takeOver);
++      note.appendChild(button('button small', 'Cancel', '', function() {
++        conflict = null;
++        render();
++        focusById('add-' + command.id);
++      }));
++      row.appendChild(note);
++    }
++    return row;
++  }
++
++  function matches(command, words) {
++    if (!words) {
++      return true;
++    }
++    let text = command.label;
++    command.shortcuts.forEach(function(shortcut) {
++      text += ' ' + shortcut.text;
++    });
++    return text.toLowerCase().indexOf(words) !== -1;
++  }
++
++  function render() {
++    if (!state) {
++      return;
++    }
++    const words = filter.value.trim().toLowerCase();
++    list.textContent = '';
++    let shown = 0;
++    state.sections.forEach(function(section) {
++      const commands = section.commands.filter(function(command) {
++        return matches(command, words);
++      });
++      if (!commands.length) {
++        return;
++      }
++      shown += commands.length;
++      const card = element('section', 'card');
++      card.appendChild(element('h2', '', section.title));
++      commands.forEach(function(command) {
++        card.appendChild(buildRow(command));
++      });
++      list.appendChild(card);
++    });
++    if (!shown) {
++      list.appendChild(element('p', 'muted', 'No command matches.'));
++    }
++
++    resetAll.disabled = !state.custom;
++    const confirm = document.getElementById('confirm-reset');
++    confirm.hidden = !confirmingResetAll;
++  }
++
++  function loadState() {
++    send('state.json', {}, function() {
++      render();
++    });
++  }
++
++  // While a shortcut is being recorded, every key press belongs to the
++  // recording and none reaches the browser.
++  document.addEventListener('keydown', function(event) {
++    if (!recording) {
++      return;
++    }
++    event.preventDefault();
++    event.stopPropagation();
++    if (event.repeat) {
++      return;
++    }
++    const key = event.keyCode;
++    // Shift, Ctrl, Alt and the Windows keys on their own, and keys that an
++    // input method is handling.
++    if (!key || key === 16 || key === 17 || key === 18 || key === 91 ||
++        key === 92 || key === 229) {
++      return;
++    }
++    const id = recording;
++    const modifiers = (event.ctrlKey ? 1 : 0) | (event.shiftKey ? 2 : 0) |
++        (event.altKey ? 4 : 0);
++    if (key === 27 && !modifiers) {
++      stopRecording(id);
++      return;
++    }
++    if (event.metaKey || event.getModifierState('AltGraph')) {
++      clearRowState();
++      refusal = {
++        id: id,
++        text: 'The Windows key and AltGr cannot be used in a shortcut.',
++      };
++      render();
++      focusById('add-' + id);
++      return;
++    }
++    addShortcut(id, (modifiers << 8) | key, false);
++  }, true);
++
++  filter.addEventListener('input', function() {
++    clearRowState();
++    render();
++  });
++
++  resetAll.addEventListener('click', function() {
++    clearRowState();
++    confirmingResetAll = true;
++    render();
++    focusById('confirm-reset-yes');
++  });
++
++  document.getElementById('confirm-reset-yes')
++      .addEventListener('click', function() {
++        clearRowState();
++        send('resetall', {}, function() {
++          render();
++          filter.focus();
++        });
++      });
++
++  document.getElementById('confirm-reset-no')
++      .addEventListener('click', function() {
++        clearRowState();
++        render();
++        resetAll.focus();
++      });
++
++  // Another tab of this page may have changed the shortcuts.
++  document.addEventListener('visibilitychange', function() {
++    if (!document.hidden && !recording && !conflict) {
++      loadState();
++    }
++  });
++
++  loadState();
++})();
++)js";
++
++// The page, up to the token.
++constexpr char kPageStart[] =
++    "<!doctype html>"
++    "<html lang=\"en\">"
++    "<head>"
++    "<meta charset=\"utf-8\">"
++    "<meta name=\"color-scheme\" content=\"light dark\">"
++    "<title>"
++    "Keyboard shortcuts</title>"
++    "<link rel=\"stylesheet\" href=\"style.css\">"
++    "</head>"
++    "<body data-token=\"";
++
++// The page, after the token.
++constexpr char kPageEnd[] =
++    "\">"
++    "<main>"
++    "<h1>"
++    "Keyboard shortcuts</h1>"
++    "<p class=\"muted\">"
++    "A change applies at once, in every window. Choose \"Add\" and "
++    "press the keys of the new shortcut. A command can have "
++    "several shortcuts.</p>"
++    "<div class=\"bar\">"
++    "<input id=\"filter\" type=\"search\" placeholder=\"Search "
++    "commands and shortcuts\" aria-label=\"Search commands and "
++    "shortcuts\">"
++    "<button id=\"reset-all\" class=\"button\" type=\"button\" "
++    "disabled>"
++    "Reset all</button>"
++    "</div>"
++    "<p id=\"confirm-reset\" class=\"card\" hidden>"
++    "Give every command its original shortcuts back? <button "
++    "id=\"confirm-reset-yes\" class=\"button danger\" type=\"button\">"
++    "Reset all</button>"
++    " <button id=\"confirm-reset-no\" class=\"button\" type=\"button\">"
++    "Cancel</button>"
++    "</p>"
++    "<p id=\"notice\" class=\"error\" role=\"alert\" hidden>"
++    "</p>"
++    "<div id=\"list\">"
++    "</div>"
++    "</main>"
++    "<script src=\"shortcuts.js\">"
++    "</script>"
++    "</body>"
++    "</html>";
++
++// Requests that change something must carry this token. The page gets it
++// when it is built. It keeps a link or a typed address from changing a
++// shortcut.
++const std::string& PageToken() {
++  static const base::NoDestructor<std::string> token(
++      base::UnguessableToken::Create().ToString());
++  return *token;
++}
++
++constexpr char kStaleJson[] =
++    "{\"message\":\"This page is out of date. Reload it.\"}";
++
++// Answers "state.json" and the requests that change a shortcut.
++std::string HandleRequest(const std::string& path, const GURL& url) {
++  // Makes sure the list has been built, which fills DefaultBindings().
++  GetAcceleratorList();
++  const std::vector<ShortcutBinding>& defaults = DefaultBindings();
++  ShortcutOverrides overrides = LoadOverrides();
++  if (path == "/state.json") {
++    return ShortcutResponseJson(ShortcutChange(), 0, defaults, overrides);
++  }
++
++  std::string token;
++  std::string command_name;
++  int shortcut = 0;
++  bool take_over = false;
++  for (net::QueryIterator it(url); !it.IsAtEnd(); it.Advance()) {
++    const std::string key(it.GetKey());
++    const std::string value(it.GetUnescapedValue());
++    if (key == "t") {
++      token = value;
++    } else if (key == "c") {
++      command_name = value;
++    } else if (key == "k") {
++      if (!base::StringToInt(value, &shortcut)) {
++        shortcut = 0;
++      }
++    } else if (key == "f") {
++      take_over = value == "1";
++    }
++  }
++  if (token != PageToken()) {
++    return kStaleJson;
++  }
++
++  const ShortcutOverrides before = overrides;
++  const ShortcutCommand* command = FindShortcutCommand(command_name);
++  ShortcutChange change;
++  if (path == "/resetall") {
++    overrides.clear();
++  } else if (!command) {
++    change.result = ShortcutResult::kError;
++    change.message = "This command is not known.";
++  } else if (path == "/add") {
++    change =
++        AddShortcut(defaults, &overrides, command->id, shortcut, take_over);
++  } else if (path == "/remove") {
++    RemoveShortcut(defaults, &overrides, command->id, shortcut);
++  } else if (path == "/reset") {
++    ResetShortcuts(&overrides, command->id);
++  }
++
++  if (overrides != before) {
++    SaveOverrides(overrides);
++    // Every browser window loads the new list during this call.
++    ReloadAcceleratorList();
++  }
++  return ShortcutResponseJson(change, shortcut, defaults, overrides);
++}
++
++bool IsRequestPath(const std::string& path) {
++  return path == "/state.json" || path == "/add" || path == "/remove" ||
++         path == "/reset" || path == "/resetall";
++}
++
++class ShortcutsSource : public content::URLDataSource {
++ public:
++  ShortcutsSource() = default;
++  ShortcutsSource(const ShortcutsSource&) = delete;
++  ShortcutsSource& operator=(const ShortcutsSource&) = delete;
++  ~ShortcutsSource() override = default;
++
++  // content::URLDataSource:
++  std::string GetSource() override { return kShortcutsHost; }
++
++  void StartDataRequest(
++      const GURL& url,
++      const content::WebContents::Getter& wc_getter,
++      content::URLDataSource::GotDataCallback callback) override {
++    const std::string path(url.path());
++    std::string body;
++    if (path == "/style.css") {
++      body = kStyleSheet;
++    } else if (path == "/shortcuts.js") {
++      body = kScript;
++    } else if (IsRequestPath(path)) {
++      body = HandleRequest(path, url);
++    } else {
++      body = std::string(kPageStart) + PageToken() + kPageEnd;
++    }
++    std::move(callback).Run(
++        base::MakeRefCounted<base::RefCountedString>(std::move(body)));
++  }
++
++  std::string GetMimeType(const GURL& url) override {
++    const std::string path(url.path());
++    if (path == "/style.css") {
++      return "text/css";
++    }
++    if (path == "/shortcuts.js") {
++      return "text/javascript";
++    }
++    if (IsRequestPath(path)) {
++      return "application/json";
++    }
++    return "text/html";
++  }
++
++  bool AllowCaching() override { return false; }
++};
++
++}  // namespace
++
++void RegisterShortcutPrefs(PrefRegistrySimple* registry) {
++  registry->RegisterDictionaryPref(kShortcutsPref);
++}
++
++void InitShortcuts() {
++  SetAcceleratorListFilter(base::BindRepeating(&FilterAcceleratorList));
++}
++
++std::string ExportShortcutsJson() {
++  base::DictValue root;
++  root.Set("format", 1);
++  root.Set(kJsonShortcutsKey, OverridesToDict(LoadOverrides()));
++  std::string json;
++  if (!base::JSONWriter::Write(base::Value(std::move(root)), &json)) {
++    return std::string();
++  }
++  return json;
++}
++
++int CountShortcutsInJson(const std::string& json) {
++  std::optional<ShortcutOverrides> overrides = OverridesFromJson(json);
++  return overrides ? static_cast<int>(overrides->size()) : -1;
++}
++
++bool ImportShortcutsJson(const std::string& json, bool replace) {
++  std::optional<ShortcutOverrides> incoming = OverridesFromJson(json);
++  if (!incoming) {
++    return false;
++  }
++  // Makes sure the list has been built, which fills DefaultBindings().
++  GetAcceleratorList();
++  const ShortcutOverrides before = LoadOverrides();
++  ShortcutOverrides overrides;
++  if (!replace) {
++    overrides = before;
++  }
++  MergeShortcutOverrides(DefaultBindings(), &overrides, *incoming);
++  if (overrides != before) {
++    SaveOverrides(overrides);
++    ReloadAcceleratorList();
++  }
++  return true;
++}
++
++bool IsShortcutsPage(content::WebContents* contents) {
++  if (!contents) {
++    return false;
++  }
++  const GURL& url = contents->GetLastCommittedURL();
++  return url.SchemeIs(content::kChromeUIScheme) && url.host() == kShortcutsHost;
++}
++
++ShortcutsUI::ShortcutsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
++  content::URLDataSource::Add(Profile::FromWebUI(web_ui),
++                              std::make_unique<ShortcutsSource>());
++}
++
++ShortcutsUI::~ShortcutsUI() = default;
++
++ShortcutsUIConfig::ShortcutsUIConfig()
++    : DefaultWebUIConfig(content::kChromeUIScheme, kShortcutsHost) {}
++
++}  // namespace yatesium
+diff --git a/chrome/browser/yatesium_shortcuts.h b/chrome/browser/yatesium_shortcuts.h
+new file mode 100644
+index 00000000..f9e01939
+--- /dev/null
++++ b/chrome/browser/yatesium_shortcuts.h
+@@ -0,0 +1,68 @@
++// Yatesium: the keyboard shortcuts page (yatesium://shortcuts,
++// chrome://shortcuts) and the shortcuts the user changed there.
++//
++// The page lists the browser's commands with their shortcuts. The user can
++// add a shortcut to a command, remove one, and go back to the original ones.
++// A change applies at once to every open window. The changes are kept in
++// Local State, so they hold for every profile.
++
++#ifndef CHROME_BROWSER_YATESIUM_SHORTCUTS_H_
++#define CHROME_BROWSER_YATESIUM_SHORTCUTS_H_
++
++#include "content/public/browser/web_ui_controller.h"
++#include "content/public/browser/webui_config.h"
++
++class PrefRegistrySimple;
++
++namespace content {
++class WebContents;
++class WebUI;
++}  // namespace content
++
++namespace yatesium {
++
++inline constexpr char kShortcutsHost[] = "shortcuts";
++
++// Registers the Local State entry that holds the user's changes.
++void RegisterShortcutPrefs(PrefRegistrySimple* registry);
++
++// Makes the browser use the user's changes. Call once at startup, after
++// Local State exists and before the first browser window is created.
++void InitShortcuts();
++
++// The shortcuts the user changed, as JSON, for a settings file (see
++// yatesium_import.h). Call on the UI thread.
++std::string ExportShortcutsJson();
++
++// The number of commands whose shortcuts `json` changes, or -1 if `json` is
++// not what ExportShortcutsJson() writes.
++int CountShortcutsInJson(const std::string& json);
++
++// Applies the shortcuts in `json`, in every open window. With `replace`, the
++// browser ends up with exactly the changes in `json`. Without it, the
++// commands in `json` get the shortcuts from there and the other commands
++// keep theirs. Returns false if `json` is not valid; nothing changes then.
++// Call on the UI thread.
++bool ImportShortcutsJson(const std::string& json, bool replace);
++
++// True if `contents` shows the shortcuts page. A browser window sends key
++// presses to this page before it treats them as shortcuts, so that the page
++// can record a key combination that is in use.
++bool IsShortcutsPage(content::WebContents* contents);
++
++class ShortcutsUI : public content::WebUIController {
++ public:
++  explicit ShortcutsUI(content::WebUI* web_ui);
++  ShortcutsUI(const ShortcutsUI&) = delete;
++  ShortcutsUI& operator=(const ShortcutsUI&) = delete;
++  ~ShortcutsUI() override;
++};
++
++class ShortcutsUIConfig : public content::DefaultWebUIConfig<ShortcutsUI> {
++ public:
++  ShortcutsUIConfig();
++};
++
++}  // namespace yatesium
++
++#endif  // CHROME_BROWSER_YATESIUM_SHORTCUTS_H_

@@ -79,9 +79,8 @@ def main():
             'tag', args.version, cwd=work)
         git('checkout', '-q', '-f', 'FETCH_HEAD', cwd=work)
 
-        for patch in patches:
-            git('apply', '--check', '--whitespace=nowarn', str(patch),
-                cwd=work)
+        # In name order, each on top of the ones before it, as build.py
+        # does. A later patch may change lines an earlier one added.
         for patch in patches:
             git('apply', '--whitespace=nowarn', str(patch), cwd=work)
             print('applies: ' + patch.name)

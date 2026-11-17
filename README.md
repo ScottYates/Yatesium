@@ -120,6 +120,7 @@ works, and writes a zip that holds:
 - bookmarks
 - browser settings
 - the search engines you added
+- the keyboard shortcuts you changed
 - installed web apps, with their icons
 - extensions, with the data they stored (their settings, filter lists,
   scripts and databases)
@@ -135,13 +136,17 @@ offers two ways to use it:
   the file in those areas. What was there before is overwritten, including
   bookmarks, search engines, web apps and extensions that the file does not
   have. The search engine that is currently the default is never removed.
+  Keyboard shortcuts become those of the file: a command the file does not
+  change gets its original shortcuts back. A file written before revision 8
+  has no shortcuts and leaves them as they are.
   History, saved passwords and sign-ins are kept.
 - "Add to this browser". A list with checkboxes, like the one for other
   browsers. Ticked bookmarks, web apps and extensions are added to what is
   already here. "Settings" applies the file's settings over the current ones;
   only the settings that Chromium would sync between installations are taken.
   "Search engines" adds the ones from the file; one whose keyword is already
-  in use is skipped.
+  in use is skipped. "Keyboard shortcuts" gives the commands that the file
+  changes the shortcuts from the file; other commands keep theirs.
   An extension brings its stored data along if this browser has none for it.
 
 Notes:
@@ -153,6 +158,49 @@ Notes:
 - After "Replace everything" on another computer, web apps are installed but
   their desktop and Start menu shortcuts may be missing. Create them from
   `yatesium://apps`.
+
+## Keyboard shortcuts
+
+The shortcuts page is opened from "Keyboard shortcuts" in the menu on the
+left of the settings page, or by typing `yatesium://shortcuts`.
+
+The page lists the browser's commands in groups (tabs, windows, navigation
+and so on) with the shortcuts each one has. A search field narrows the list
+by command name or by shortcut.
+
+- "Add" records a new shortcut for a command: press the keys. Esc cancels. A
+  command can have several shortcuts.
+- The "x" next to a shortcut removes it.
+- If the keys already belong to another command, the page says which one and
+  offers "Move it here".
+- "Reset" gives one command its original shortcuts back. "Reset all" does
+  that for every command, after asking.
+- Some commands have no shortcut to begin with, such as "Duplicate tab",
+  "Pin or unpin tab", "Settings" and "Exit". They can be given one.
+
+A change applies at once in every open window. The changes are stored in
+`Data\User Data\Local State` and hold for every profile.
+
+What the page refuses:
+
+- A key without Ctrl or Alt, unless it is a function key (F1 to F24).
+- The text editing shortcuts: Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+Z, Ctrl+Y,
+  and Ctrl with an arrow key, Home, End, Backspace, Delete or Insert.
+- Shortcuts that Windows handles itself, such as Alt+Tab, and shortcuts with
+  the Windows key or AltGr.
+- Esc on its own. It keeps its built-in meaning (stop loading, close the find
+  bar).
+
+Notes:
+
+- Key names are those of the US keyboard layout. On another layout the
+  punctuation keys can be labelled differently.
+- An extension's own shortcuts are still set on
+  `yatesium://extensions/shortcuts`.
+- The settings file of `yatesium://import` contains the changed shortcuts.
+  See "Settings file" above.
+- A toolbar button's tooltip can show the old shortcut until a new window is
+  opened.
 
 ## Google sign-in and sync
 
@@ -412,6 +460,7 @@ only the files they touch are recompiled.
 | `patches/0016` | No "Uninstall" button in the title bar of web app windows |
 | `patches/0017` | Update check and build information on the About page |
 | `patches/0018` | "Import and export" entry in the settings menu |
+| `patches/0019` | The keyboard shortcuts page, its entry in the settings menu, and the shortcuts in the settings file |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |
