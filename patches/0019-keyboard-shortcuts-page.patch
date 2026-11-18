@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 60de8761..a25c4ab1 100644
+index 6e1dde1c1..adea706fc 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -1616,6 +1616,12 @@ source_set("core") {
+@@ -1715,6 +1715,12 @@ source_set("core") {
        "yatesium_import.cc",
        "yatesium_import.h",
  
@@ -16,10 +16,10 @@ index 60de8761..a25c4ab1 100644
        "icon_loader_win.cc",
        "memory_details_win.cc",
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index 87fb0a15..78e04428 100644
+index 8e6a07884..ac0b07085 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
-@@ -252,6 +252,7 @@
+@@ -255,6 +255,7 @@
  #include "chrome/browser/win/chrome_select_file_dialog_factory.h"
  #include "chrome/browser/win/parental_controls.h"
  #include "chrome/browser/yatesium_import.h"
@@ -27,7 +27,7 @@ index 87fb0a15..78e04428 100644
  #include "ui/shell_dialogs/select_file_dialog.h"
  
  #if BUILDFLAG(USE_BROWSER_SPELLCHECKER)
-@@ -1924,6 +1925,9 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+@@ -1928,6 +1929,9 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
    // Yatesium: a "replace everything" import from a settings file is carried
    // out here, before any profile opens its files.
    yatesium::ApplyPendingRestore(user_data_dir_);
@@ -38,10 +38,10 @@ index 87fb0a15..78e04428 100644
    StartupProfileInfo profile_info = CreateInitialProfile(
        user_data_dir_, *base::CommandLine::ForCurrentProcess());
 diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
-index 334da9ad..e29acca1 100644
+index fdd05fad3..341b0aa7c 100644
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
-@@ -529,6 +529,7 @@
+@@ -527,6 +527,7 @@
  #include "chrome/browser/media/media_foundation_service_monitor.h"
  #include "chrome/browser/os_crypt/app_bound_encryption_provider_win.h"
  #include "chrome/browser/webnn/webnn_prefs.h"
@@ -49,7 +49,7 @@ index 334da9ad..e29acca1 100644
  #include "components/os_crypt/async/browser/dpapi_key_provider.h"
  #include "components/os_crypt/async/browser/os_crypt_win.h"
  #endif  // BUILDFLAG(IS_WIN)
-@@ -1916,6 +1917,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
+@@ -1972,6 +1973,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
    registry->RegisterTimePref(prefs::kStartupLaunchInfobarLastDeclinedTime,
                               base::Time());
    registry->RegisterIntegerPref(prefs::kStartupLaunchInfobarDeclinedCount, 0);
@@ -59,7 +59,7 @@ index 334da9ad..e29acca1 100644
  
  #if BUILDFLAG(ENABLE_DOWNGRADE_PROCESSING)
 diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html b/chrome/browser/resources/settings/settings_menu/settings_menu.html
-index ca97d5e6..db5de479 100644
+index ca97d5e66..db5de479c 100644
 --- a/chrome/browser/resources/settings/settings_menu/settings_menu.html
 +++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html
 @@ -1,5 +1,5 @@
@@ -85,7 +85,7 @@ index ca97d5e6..db5de479 100644
              href="chrome://import" target="_blank"
              title="$i18n{yatesiumImportTooltip}">
 diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.ts b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
-index f82af5a7..e2b1e5c7 100644
+index f82af5a78..e2b1e5c78 100644
 --- a/chrome/browser/resources/settings/settings_menu/settings_menu.ts
 +++ b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
 @@ -133,8 +133,10 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
@@ -102,10 +102,10 @@ index f82af5a7..e2b1e5c7 100644
      }
    }
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index 1e352a02..d9ae15e5 100644
+index 88668a0b3..841ea36f8 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -1107,7 +1107,10 @@ if (!is_android) {
+@@ -1102,7 +1102,10 @@ if (!is_android) {
  source_set("accelerator_table") {
    public = [ "accelerator_table.h" ]
    sources = [ "accelerator_table.cc" ]
@@ -118,7 +118,7 @@ index 1e352a02..d9ae15e5 100644
      "//build:branding_buildflags",
      "//chrome/app:command_ids",
 diff --git a/chrome/browser/ui/accelerator_table.cc b/chrome/browser/ui/accelerator_table.cc
-index a000ed9a..e3f5d8d0 100644
+index f074c958b..909c7ab09 100644
 --- a/chrome/browser/ui/accelerator_table.cc
 +++ b/chrome/browser/ui/accelerator_table.cc
 @@ -7,6 +7,7 @@
@@ -128,8 +128,8 @@ index a000ed9a..e3f5d8d0 100644
 +#include <utility>
  #include <vector>
  
- #include "base/feature_list.h"
-@@ -305,6 +306,17 @@ std::vector<AcceleratorMapping>* GetAcceleratorsPointer() {
+ #include "base/containers/span.h"
+@@ -372,6 +373,17 @@ std::vector<AcceleratorMapping>* GetAcceleratorsPointer() {
    return accelerators.get();
  }
  
@@ -147,9 +147,9 @@ index a000ed9a..e3f5d8d0 100644
  }  // namespace
  
  std::vector<AcceleratorMapping> GetAcceleratorList() {
-@@ -353,6 +365,11 @@ std::vector<AcceleratorMapping> GetAcceleratorList() {
-                          std::end(kTabGroupAcceleratorMap));
- #endif  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_CHROMEOS)
+@@ -434,6 +446,11 @@ std::vector<AcceleratorMapping> GetAcceleratorList() {
+     }
+ #endif  // !BUILDFLAG(IS_ANDROID)
  
 +    // Yatesium: apply the shortcuts the user changed.
 +    if (GetAcceleratorListFilter()) {
@@ -159,7 +159,7 @@ index a000ed9a..e3f5d8d0 100644
      for (AcceleratorMapping& mapping : *accelerators) {
        mapping.action_id = chrome::GetActionIdForCommandId(mapping.command_id);
      }
-@@ -361,6 +378,21 @@ std::vector<AcceleratorMapping> GetAcceleratorList() {
+@@ -442,6 +459,21 @@ std::vector<AcceleratorMapping> GetAcceleratorList() {
    return *accelerators;
  }
  
@@ -182,7 +182,7 @@ index a000ed9a..e3f5d8d0 100644
    std::vector<AcceleratorMapping>* accelerators = GetAcceleratorsPointer();
    accelerators->clear();
 diff --git a/chrome/browser/ui/accelerator_table.h b/chrome/browser/ui/accelerator_table.h
-index 171ee09c..c2e221d6 100644
+index 6b9b99fad..658f6c704 100644
 --- a/chrome/browser/ui/accelerator_table.h
 +++ b/chrome/browser/ui/accelerator_table.h
 @@ -8,6 +8,8 @@
@@ -219,10 +219,10 @@ index 171ee09c..c2e221d6 100644
  void ClearAcceleratorListForTesting();
  
 diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
-index d441b8a7..45c70209 100644
+index 764e29529..44f0bb7a9 100644
 --- a/chrome/browser/ui/views/frame/browser_view.cc
 +++ b/chrome/browser/ui/views/frame/browser_view.cc
-@@ -410,6 +410,7 @@
+@@ -413,6 +413,7 @@
  #include "chrome/browser/taskbar/taskbar_decorator_win.h"
  #include "chrome/browser/win/jumplist.h"
  #include "chrome/browser/win/jumplist_factory.h"
@@ -230,7 +230,7 @@ index d441b8a7..45c70209 100644
  #include "ui/gfx/color_palette.h"
  #include "ui/gfx/win/hwnd_util.h"
  #include "ui/native_theme/native_theme_win.h"
-@@ -3231,6 +3232,16 @@ content::KeyboardEventProcessingResult BrowserView::PreHandleKeyboardEvent(
+@@ -3262,6 +3263,16 @@ content::KeyboardEventProcessingResult BrowserView::PreHandleKeyboardEvent(
      return content::KeyboardEventProcessingResult::NOT_HANDLED;
    }
  
@@ -247,7 +247,7 @@ index d441b8a7..45c70209 100644
    ui::Accelerator accelerator =
        ui::GetAcceleratorFromNativeWebKeyboardEvent(event);
  
-@@ -5054,6 +5065,11 @@ void BrowserView::AddedToWidget() {
+@@ -5100,6 +5111,11 @@ void BrowserView::AddedToWidget() {
  #endif
  
    LoadAccelerators();
@@ -259,8 +259,8 @@ index d441b8a7..45c70209 100644
  
    // ImmersiveModeController may depend on the presence of a Widget, so it
    // is initialized here.
-@@ -5693,6 +5709,30 @@ void BrowserView::LoadAccelerators() {
-   }
+@@ -5759,6 +5775,33 @@ void BrowserView::LoadAccelerators() {
+ #endif
  }
  
 +void BrowserView::ReloadAccelerators() {
@@ -268,11 +268,13 @@ index d441b8a7..45c70209 100644
 +  if (!focus_manager) {
 +    return;
 +  }
-+  // Unregister what LoadAccelerators() registered: the table, and the two
-+  // Esc accelerators if the table does not have them.
++  // Unregister what LoadAccelerators() registered: the table and, where
++  // LoadAccelerators() registers them, the two Esc accelerators if the table
++  // does not have them.
 +  for (const auto& entry : accelerator_table_) {
 +    focus_manager->UnregisterAccelerator(entry.first, this);
 +  }
++#if BUILDFLAG(IS_MAC)
 +  const ui::Accelerator escape_pressed(ui::VKEY_ESCAPE, ui::EF_NONE,
 +                                       ui::Accelerator::KeyState::PRESSED);
 +  if (accelerator_table_.find(escape_pressed) == accelerator_table_.end()) {
@@ -283,6 +285,7 @@ index d441b8a7..45c70209 100644
 +  if (accelerator_table_.find(escape_released) == accelerator_table_.end()) {
 +    focus_manager->UnregisterAccelerator(escape_released, this);
 +  }
++#endif
 +  accelerator_table_.clear();
 +  LoadAccelerators();
 +}
@@ -291,10 +294,10 @@ index d441b8a7..45c70209 100644
  #if BUILDFLAG(IS_WIN)
    switch (app_command_id) {
 diff --git a/chrome/browser/ui/views/frame/browser_view.h b/chrome/browser/ui/views/frame/browser_view.h
-index e7bfac16..9f54679f 100644
+index 750e46c97..6cbabda34 100644
 --- a/chrome/browser/ui/views/frame/browser_view.h
 +++ b/chrome/browser/ui/views/frame/browser_view.h
-@@ -969,6 +969,10 @@ class BrowserView : public BrowserWindow,
+@@ -976,6 +976,10 @@ class BrowserView : public BrowserWindow,
    // use.
    void LoadAccelerators();
  
@@ -305,7 +308,7 @@ index e7bfac16..9f54679f 100644
    // Retrieves the command id for the specified Windows app command.
    int GetCommandIDForAppCommandID(int app_command_id) const;
  
-@@ -1256,6 +1260,9 @@ class BrowserView : public BrowserWindow,
+@@ -1263,6 +1267,9 @@ class BrowserView : public BrowserWindow,
    // A mapping between accelerators and command IDs.
    std::map<ui::Accelerator, int> accelerator_table_;
  
@@ -316,10 +319,10 @@ index e7bfac16..9f54679f 100644
    bool initialized_ = false;
  
 diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-index 57d21b5e..282a2751 100644
+index c018dfafd..da6383ed4 100644
 --- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 +++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-@@ -180,6 +180,7 @@
+@@ -181,6 +181,7 @@
  #if BUILDFLAG(IS_WIN)
  #include "chrome/browser/ui/webui/conflicts/conflicts_ui.h"
  #include "chrome/browser/yatesium_import.h"
@@ -327,7 +330,7 @@ index 57d21b5e..282a2751 100644
  #include "chrome/browser/ui/webui/default_browser/visual_guided_setter_ui.h"
  #endif  // BUILDFLAG(IS_WIN)
  
-@@ -294,6 +295,8 @@ void RegisterChromeWebUIConfigs() {
+@@ -295,6 +296,8 @@ void RegisterChromeWebUIConfigs() {
  #if BUILDFLAG(IS_WIN)
    // Yatesium: the import page.
    map.AddWebUIConfig(std::make_unique<yatesium::ImportUIConfig>());
@@ -337,10 +340,10 @@ index 57d21b5e..282a2751 100644
    map.AddWebUIConfig(std::make_unique<DataSharingInternalsUIConfig>());
    map.AddWebUIConfig(std::make_unique<DownloadInternalsUIConfig>());
 diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-index 2c80e83e..babb47ae 100644
+index 22a76a68d..81346d1f8 100644
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -4523,6 +4523,10 @@ void AddExtensionsStrings(content::WebUIDataSource* html_source) {
+@@ -4430,6 +4430,10 @@ void AddExtensionsStrings(content::WebUIDataSource* html_source) {
    html_source->AddString(
        "yatesiumImportTooltip",
        u"Import from another browser, or export and import a settings file");
@@ -352,7 +355,7 @@ index 2c80e83e..babb47ae 100644
  
  void AddSecurityKeysStrings(content::WebUIDataSource* html_source) {
 diff --git a/chrome/browser/yatesium_import.cc b/chrome/browser/yatesium_import.cc
-index e8fa4a9c..75a3f63e 100644
+index e8fa4a9c3..75a3f63e3 100644
 --- a/chrome/browser/yatesium_import.cc
 +++ b/chrome/browser/yatesium_import.cc
 @@ -61,6 +61,7 @@
@@ -616,7 +619,7 @@ index e8fa4a9c..75a3f63e 100644
        {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
 diff --git a/chrome/browser/yatesium_shortcut_table.cc b/chrome/browser/yatesium_shortcut_table.cc
 new file mode 100644
-index 00000000..ea7a160b
+index 000000000..ea7a160ba
 --- /dev/null
 +++ b/chrome/browser/yatesium_shortcut_table.cc
 @@ -0,0 +1,673 @@
@@ -1295,7 +1298,7 @@ index 00000000..ea7a160b
 +}  // namespace yatesium
 diff --git a/chrome/browser/yatesium_shortcut_table.h b/chrome/browser/yatesium_shortcut_table.h
 new file mode 100644
-index 00000000..8823f60f
+index 000000000..8823f60f6
 --- /dev/null
 +++ b/chrome/browser/yatesium_shortcut_table.h
 @@ -0,0 +1,126 @@
@@ -1427,7 +1430,7 @@ index 00000000..8823f60f
 +#endif  // CHROME_BROWSER_YATESIUM_SHORTCUT_TABLE_H_
 diff --git a/chrome/browser/yatesium_shortcuts.cc b/chrome/browser/yatesium_shortcuts.cc
 new file mode 100644
-index 00000000..af531d56
+index 000000000..af531d560
 --- /dev/null
 +++ b/chrome/browser/yatesium_shortcuts.cc
 @@ -0,0 +1,936 @@
@@ -2369,7 +2372,7 @@ index 00000000..af531d56
 +}  // namespace yatesium
 diff --git a/chrome/browser/yatesium_shortcuts.h b/chrome/browser/yatesium_shortcuts.h
 new file mode 100644
-index 00000000..f9e01939
+index 000000000..f9e019397
 --- /dev/null
 +++ b/chrome/browser/yatesium_shortcuts.h
 @@ -0,0 +1,68 @@
