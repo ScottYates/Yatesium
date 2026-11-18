@@ -1,0 +1,15 @@
+diff --git a/chrome/browser/ui/safety_hub/safe_browsing_result.cc b/chrome/browser/ui/safety_hub/safe_browsing_result.cc
+index 3dbe0687..c14c1a59 100644
+--- a/chrome/browser/ui/safety_hub/safe_browsing_result.cc
++++ b/chrome/browser/ui/safety_hub/safe_browsing_result.cc
+@@ -121,7 +121,9 @@ base::DictValue SafetyHubSafeBrowsingResult::ToDictValue() const {
+ }
+ 
+ bool SafetyHubSafeBrowsingResult::IsTriggerForMenuNotification() const {
+-  return status_ == SafeBrowsingState::kDisabledByUser;
++  // Yatesium: Safe Browsing is removed, so it is always off. The menu does not
++  // remind the user about that.
++  return false;
+ }
+ 
+ bool SafetyHubSafeBrowsingResult::WarrantsNewMenuNotification(

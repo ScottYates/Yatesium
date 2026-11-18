@@ -485,6 +485,7 @@ only the files they touch are recompiled.
 | `patches/0018` | "Import and export" entry in the settings menu |
 | `patches/0019` | The keyboard shortcuts page, its entry in the settings menu, and the shortcuts in the settings file |
 | `patches/0020` | "Ask" and "Search with Google Lens" send the picture to the image search page |
+| `patches/0021` | The menu does not show the "Safe Browsing is off" reminder |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |
