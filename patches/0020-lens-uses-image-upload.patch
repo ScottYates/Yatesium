@@ -1,0 +1,114 @@
+diff --git a/chrome/browser/ui/lens/lens_search_controller.cc b/chrome/browser/ui/lens/lens_search_controller.cc
+index 5993f406..ec4a344a 100644
+--- a/chrome/browser/ui/lens/lens_search_controller.cc
++++ b/chrome/browser/ui/lens/lens_search_controller.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/check.h"
+ #include "base/debug/dump_without_crashing.h"
++#include "base/feature_list.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/task/task_traits.h"
+ #include "base/task/thread_pool.h"
+@@ -18,7 +19,9 @@
+ #include "chrome/browser/contextual_tasks/contextual_tasks_utils.h"
+ #include "chrome/browser/contextual_tasks/entry_point_eligibility_manager.h"
+ #include "chrome/browser/lens/core/mojom/geometry.mojom.h"
++#include "chrome/browser/lens/region_search/lens_region_search_controller.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/search/search.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/hats/hats_service.h"
+@@ -41,13 +44,16 @@
+ #include "chrome/browser/ui/lens/lens_session_metrics_logger.h"
+ #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+ #include "chrome/browser/ui/side_panel/side_panel_ui.h"
++#include "chrome/browser/ui/tab_contents/core_tab_helper.h"
+ #include "chrome/browser/ui/tabs/public/tab_features.h"
+ #include "chrome/browser/ui/webui/util/image_util.h"
+ #include "chrome/browser/ui/webui/webui_embedding_context.h"
+ #include "components/contextual_search/contextual_search_service.h"
+ #include "components/contextual_search/contextual_search_session_handle.h"
+ #include "components/contextual_tasks/public/features.h"
++#include "components/lens/lens_entrypoints.h"
+ #include "components/lens/lens_features.h"
++#include "components/lens/lens_metrics.h"
+ #include "components/lens/lens_overlay_permission_utils.h"
+ #include "components/lens/lens_url_utils.h"
+ #include "components/omnibox/browser/autocomplete_match_type.h"
+@@ -61,9 +67,16 @@
+ #include "third_party/skia/include/core/SkBitmap.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/image/image.h"
+ #include "ui/gfx/image/image_skia_operations.h"
+ 
+ namespace {
++// Yatesium: on by default. When on, the entry points of the Lens overlay
++// post the selected picture to the image search page of the default search
++// engine. Turn it off (--disable-features=YatesiumLensImageUpload) to get
++// the Lens overlay back.
++BASE_FEATURE(kYatesiumLensImageUpload, base::FEATURE_ENABLED_BY_DEFAULT);
++
+ // The size of the thumbnail to send to the searchbox.
+ inline constexpr float kMaxThumbnailWidth = 100.0f;
+ inline constexpr float kMaxThumbnailHeight = 100.0f;
+@@ -213,6 +226,28 @@ void LensSearchController::OpenLensOverlay(
+     bool should_show_csb) {
+   CheckInitialized(initialized_);
+ 
++  // Yatesium: the Lens overlay sends what the user selects to a Google API
++  // that needs the API key of a Google browser, so it cannot work here.
++  // Start the older region search in its place. The user drags a rectangle
++  // over the page, and the picture of that region is posted to the image
++  // search page of the default search engine, in a new tab. That needs no
++  // key. This covers the "Ask" button in the address bar and the Lens entries
++  // of the menus.
++  if (base::FeatureList::IsEnabled(kYatesiumLensImageUpload)) {
++    if (tab_ && tab_->GetContents() && tab_->GetBrowserWindowInterface()) {
++      BrowserWindowInterface* browser = tab_->GetBrowserWindowInterface();
++      if (auto* region_search =
++              lens::LensRegionSearchController::From(browser)) {
++        region_search->Start(
++            tab_->GetContents(), /*use_fullscreen_capture=*/false,
++            search::DefaultSearchProviderIsGoogle(browser->GetProfile()),
++            lens::AmbientSearchEntryPoint::
++                CONTEXT_MENU_SEARCH_REGION_WITH_GOOGLE_LENS);
++      }
++    }
++    return;
++  }
++
+   // The overlay can only be reinvoked if the feature is enabled or if invoked
+   // from the Contextual Tasks composebox.
+   const bool allow_reinvoking_overlay =
+@@ -278,6 +313,28 @@ void LensSearchController::OpenLensOverlayWithPendingRegion(
+     lens::LensOverlayInvocationSource invocation_source,
+     lens::mojom::CenterRotatedBoxPtr region,
+     const SkBitmap& region_bitmap) {
++  // Yatesium: see OpenLensOverlay(). This is the path of "Search with Google
++  // Lens" on a picture: `region_bitmap` is that picture. Post it to the image
++  // search page of the default search engine, in a new tab.
++  if (base::FeatureList::IsEnabled(kYatesiumLensImageUpload)) {
++    if (tab_ && tab_->GetContents() && tab_->GetBrowserWindowInterface() &&
++        !region_bitmap.drawsNothing()) {
++      if (auto* core_tab_helper =
++              CoreTabHelper::FromWebContents(tab_->GetContents())) {
++        const gfx::Image image = gfx::Image::CreateFrom1xBitmap(region_bitmap);
++        if (search::DefaultSearchProviderIsGoogle(
++                tab_->GetBrowserWindowInterface()->GetProfile())) {
++          core_tab_helper->SearchWithLens(
++              image, lens::EntryPoint::
++                         CHROME_SEARCH_WITH_GOOGLE_LENS_CONTEXT_MENU_ITEM);
++        } else {
++          core_tab_helper->SearchByImage(image);
++        }
++      }
++    }
++    return;
++  }
++
+   // If the eligibility checks fail, do not procced with opening any UI.
+   if (!IsOff() ||
+       !RunLensEligibilityChecks(

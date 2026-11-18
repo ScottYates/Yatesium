@@ -202,6 +202,29 @@ Notes:
 - A toolbar button's tooltip can show the old shortcut until a new window is
   opened.
 
+## Searching by picture (the "Ask" button)
+
+Chromium's "Ask" button in the address bar, and "Search with Google Lens" in
+the menus, normally open the Lens overlay. The overlay sends what you select
+to a Google service that only accepts the API key of a Google browser, so in
+Yatesium it did not work.
+
+Yatesium uses the older way to search by picture:
+
+- "Ask", and "Search with Google Lens" on a page: drag a rectangle over the
+  part of the page to search for. Esc cancels. The picture of that part is
+  sent to the image search page of your default search engine, and the
+  results open in a new tab.
+- "Search with Google Lens" on a picture: that picture is sent the same way.
+
+With Google as the default search engine the results are Google Lens results.
+No API key is needed. The picture goes to the search engine only when you use
+one of these commands.
+
+The Lens side panel, with its follow-up questions next to the page, is not
+available this way. To get the original overlay back, start Yatesium with
+`--disable-features=YatesiumLensImageUpload`.
+
 ## Google sign-in and sync
 
 Google only lets a browser sign in and sync with credentials that belong to
@@ -461,6 +484,7 @@ only the files they touch are recompiled.
 | `patches/0017` | Update check and build information on the About page |
 | `patches/0018` | "Import and export" entry in the settings menu |
 | `patches/0019` | The keyboard shortcuts page, its entry in the settings menu, and the shortcuts in the settings file |
+| `patches/0020` | "Ask" and "Search with Google Lens" send the picture to the image search page |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |
