@@ -1,0 +1,41 @@
+diff --git a/chrome/yatesium_update/yatesium_update.cc b/chrome/yatesium_update/yatesium_update.cc
+index 4286662..2d81700 100644
+--- a/chrome/yatesium_update/yatesium_update.cc
++++ b/chrome/yatesium_update/yatesium_update.cc
+@@ -812,8 +812,7 @@ bool Update(const std::wstring& install_dir,
+ 
+   const std::wstring stamp_path = work_dir + L"\\last-check.txt";
+   if (g_auto && !g_now) {
+-    // Let the browser finish starting, then check at most once a day.
+-    Sleep(60000);
++    // Check at most once a day.
+     double hours = HoursSinceWritten(stamp_path);
+     if (hours >= 0 && hours < 24) {
+       return true;
+@@ -958,11 +957,23 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t* command_line, int) {
+     g_console = GetStdHandle(STD_OUTPUT_HANDLE);
+   }
+ 
++  if (g_auto && !g_now) {
++    // The automatic check lets the browser finish starting first. It waits
++    // before it takes the lock, so that a check from the About page in that
++    // time starts at once. There is nothing to wait for if today's check is
++    // already done.
++    const double hours =
++        HoursSinceWritten(data_dir + L"\\Update\\last-check.txt");
++    if (hours < 0 || hours >= 24) {
++      Sleep(60000);
++    }
++  }
++
+   int exit_code = 0;
+   HANDLE mutex = CreateMutexW(nullptr, FALSE, MutexName(install_dir).c_str());
+-  // A check from the About page waits for an updater that is in its start-up
+-  // delay to get out of the way. One that is waiting for the browser to
+-  // close keeps the lock; its state file already says "ready".
++  // A check from the About page waits for an updater that is in the middle
++  // of its own check to finish. One that is waiting for the browser to close
++  // keeps the lock; its state file already says "ready".
+   DWORD wait =
+       mutex ? WaitForSingleObject(mutex, g_now ? 90000 : 0) : WAIT_FAILED;
+   if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {

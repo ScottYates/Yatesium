@@ -488,6 +488,7 @@ only the files they touch are recompiled.
 | `patches/0020` | "Ask" and "Search with Google Lens" send the picture to the image search page |
 | `patches/0021` | The menu does not show the "Safe Browsing is off" reminder |
 | `patches/0022` | "Relaunch" after an update also brings back app (PWA) windows |
+| `patches/0023` | The update check on the About page does not wait for the automatic check's start-up delay |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |
