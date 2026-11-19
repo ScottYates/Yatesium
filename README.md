@@ -304,7 +304,8 @@ happened.
   "Help", "About Yatesium" in the menu). It checks as soon as it opens, shows
   "Checking for updates", the download progress, and then either "Yatesium is
   up to date" or a "Relaunch" button. "Relaunch" closes the browser, installs
-  the update and starts the browser again with its tabs.
+  the update and starts the browser again with its tabs and its app (PWA)
+  windows.
 - The About page also shows the Yatesium build next to the Chromium version:
   version with revision, the commit it was built from, and the build date.
 - Running `yatesium_update.exe` by hand does the same check and reports in a
@@ -486,6 +487,7 @@ only the files they touch are recompiled.
 | `patches/0019` | The keyboard shortcuts page, its entry in the settings menu, and the shortcuts in the settings file |
 | `patches/0020` | "Ask" and "Search with Google Lens" send the picture to the image search page |
 | `patches/0021` | The menu does not show the "Safe Browsing is off" reminder |
+| `patches/0022` | "Relaunch" after an update also brings back app (PWA) windows |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |

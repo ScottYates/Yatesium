@@ -1,0 +1,32 @@
+diff --git a/chrome/browser/ui/webui/settings/browser_lifetime_handler.cc b/chrome/browser/ui/webui/settings/browser_lifetime_handler.cc
+index 9ceb126..1025a4c 100644
+--- a/chrome/browser/ui/webui/settings/browser_lifetime_handler.cc
++++ b/chrome/browser/ui/webui/settings/browser_lifetime_handler.cc
+@@ -15,7 +15,10 @@
+ #if BUILDFLAG(IS_WIN)
+ #include "base/task/task_traits.h"
+ #include "base/task/thread_pool.h"
++#include "chrome/browser/browser_process.h"
+ #include "chrome/browser/ui/webui/help/yatesium_update.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_service.h"
+ #endif
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+@@ -71,7 +74,15 @@ void TriggerTPMFirmwareUpdate(
+ // again. Otherwise they relaunch as usual.
+ void FinishRelaunch(bool restart, bool update_is_ready) {
+   if (update_is_ready) {
+-    chrome::AttemptExit();
++    // Close the way a restart does, so that the next start brings back app
++    // windows and session cookies as well as tabs. A plain exit followed by
++    // --restore-last-session restores browser windows only.
++    chrome::AttemptRestart();
++    // The updater starts the browser again once the update is installed. The
++    // browser must not start itself: the updater waits for every browser
++    // process to be gone. Shutdown reads this flag after the windows close.
++    g_browser_process->local_state()->SetBoolean(
++        prefs::kRestartLastSessionOnShutdown, false);
+   } else if (restart) {
+     chrome::AttemptRestart();
+   } else {
