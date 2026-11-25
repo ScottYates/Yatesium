@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/web_apps/frame_toolbar/web_app_toolbar_button_container.cc b/chrome/browser/ui/views/web_apps/frame_toolbar/web_app_toolbar_button_container.cc
-index 658c7d16c..d0aabcdae 100644
+index 7dc23622f..5bd88432c 100644
 --- a/chrome/browser/ui/views/web_apps/frame_toolbar/web_app_toolbar_button_container.cc
 +++ b/chrome/browser/ui/views/web_apps/frame_toolbar/web_app_toolbar_button_container.cc
-@@ -143,7 +143,11 @@ WebAppToolbarButtonContainer::WebAppToolbarButtonContainer(
+@@ -144,7 +144,11 @@ WebAppToolbarButtonContainer::WebAppToolbarButtonContainer(
    // launch after installing, next to the origin display. Filter out
    // preinstalled apps by default, even though the user can still uninstall
    // them.

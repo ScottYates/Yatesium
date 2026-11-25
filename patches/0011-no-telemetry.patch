@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index 1defcfa51..367b22e56 100644
+index 66fc9124d..39d01ab86 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -1650,7 +1650,7 @@ void ChromeContentBrowserClient::RegisterLocalStatePrefs(
+@@ -1630,7 +1630,7 @@ void ChromeContentBrowserClient::RegisterLocalStatePrefs(
  void ChromeContentBrowserClient::RegisterProfilePrefs(
      user_prefs::PrefRegistrySyncable* registry) {
    registry->RegisterBooleanPref(prefs::kDisable3DAPIs, false);
@@ -25,7 +25,7 @@ index e3f85943e..fa6e2182e 100644
      return false;
    }
 diff --git a/chrome/install_static/install_util.cc b/chrome/install_static/install_util.cc
-index f7798f7da..8bbc5554a 100644
+index 0a8af7cc2..a05740cae 100644
 --- a/chrome/install_static/install_util.cc
 +++ b/chrome/install_static/install_util.cc
 @@ -448,6 +448,10 @@ std::string GetSafeBrowsingName() {
@@ -39,18 +39,6 @@ index f7798f7da..8bbc5554a 100644
    bool enabled = true;
  
    if (ReportingIsEnforcedByPolicy(&enabled))
-diff --git a/components/attribution_reporting/features.cc b/components/attribution_reporting/features.cc
-index b199e7682..7eda43f10 100644
---- a/components/attribution_reporting/features.cc
-+++ b/components/attribution_reporting/features.cc
-@@ -9,6 +9,6 @@
- namespace attribution_reporting::features {
- 
- // Controls whether the Conversion Measurement API infrastructure is enabled.
--BASE_FEATURE(kConversionMeasurement, base::FEATURE_ENABLED_BY_DEFAULT);
-+BASE_FEATURE(kConversionMeasurement, base::FEATURE_DISABLED_BY_DEFAULT);
- 
- }  // namespace attribution_reporting::features
 diff --git a/components/metrics/metrics_service_accessor.cc b/components/metrics/metrics_service_accessor.cc
 index 83e963b07..f7b47257d 100644
 --- a/components/metrics/metrics_service_accessor.cc
@@ -70,7 +58,7 @@ index 83e963b07..f7b47257d 100644
    return IsMetricsReportingEnabledForOfficialBuild(local_state);
  #else
 diff --git a/services/network/public/cpp/features.cc b/services/network/public/cpp/features.cc
-index df3dc8855..60c077aa9 100644
+index 75b177504..74b7db3c2 100644
 --- a/services/network/public/cpp/features.cc
 +++ b/services/network/public/cpp/features.cc
 @@ -16,9 +16,9 @@
@@ -85,12 +73,3 @@ index df3dc8855..60c077aa9 100644
  
  // Based on the field trial parameters, this feature will override the value of
  // the maximum number of delayable requests allowed in flight. The number of
-@@ -413,7 +413,7 @@ BASE_FEATURE(kAllowSameOriginCredentialsWithDisableWebSecurity,
- 
- // https://github.com/patcg-individual-drafts/topics
- // Kill switch for the Topics API.
--BASE_FEATURE(kBrowsingTopics, base::FEATURE_ENABLED_BY_DEFAULT);
-+BASE_FEATURE(kBrowsingTopics, base::FEATURE_DISABLED_BY_DEFAULT);
- 
- 
- BASE_FEATURE(kIncreaseCookieAccessCacheSize, base::FEATURE_ENABLED_BY_DEFAULT);

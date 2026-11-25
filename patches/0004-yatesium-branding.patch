@@ -1,5 +1,5 @@
 diff --git a/chrome/app/theme/chromium/BRANDING b/chrome/app/theme/chromium/BRANDING
-index f8363d5b..66642d5d 100644
+index f8363d5b2..66642d5d5 100644
 --- a/chrome/app/theme/chromium/BRANDING
 +++ b/chrome/app/theme/chromium/BRANDING
 @@ -1,10 +1,10 @@
@@ -21,7 +21,7 @@ index f8363d5b..66642d5d 100644
  MAC_CREATOR_CODE=Cr24
  MAC_TEAM_ID=
 diff --git a/chrome/install_static/chromium_install_modes.h b/chrome/install_static/chromium_install_modes.h
-index a6d969df..970bd30e 100644
+index a6d969df5..970bd30e6 100644
 --- a/chrome/install_static/chromium_install_modes.h
 +++ b/chrome/install_static/chromium_install_modes.h
 @@ -21,7 +21,7 @@ inline constexpr wchar_t kCompanyPathName[] = L"";

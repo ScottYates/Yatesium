@@ -1,8 +1,8 @@
 diff --git a/components/safe_browsing/core/common/safe_browsing_prefs.cc b/components/safe_browsing/core/common/safe_browsing_prefs.cc
-index ed4747e5f..71ca937a7 100644
+index 71ef1f822..946782b2b 100644
 --- a/components/safe_browsing/core/common/safe_browsing_prefs.cc
 +++ b/components/safe_browsing/core/common/safe_browsing_prefs.cc
-@@ -91,6 +91,10 @@ void SetSecurityBundleSetting(PrefService& prefs,
+@@ -129,6 +129,10 @@ void SetSecurityBundleSetting(PrefService& prefs,
  }
  
  SafeBrowsingState GetSafeBrowsingState(const PrefService& prefs) {
@@ -13,7 +13,7 @@ index ed4747e5f..71ca937a7 100644
    if (IsEnhancedProtectionEnabled(prefs)) {
      return SafeBrowsingState::ENHANCED_PROTECTION;
    } else if (prefs.GetBoolean(prefs::kSafeBrowsingEnabled)) {
-@@ -163,7 +167,8 @@ void SetSafeBrowsingState(PrefService* prefs,
+@@ -251,7 +255,8 @@ void SetSafeBrowsingState(PrefService* prefs,
  }
  
  bool IsSafeBrowsingEnabled(const PrefService& prefs) {
@@ -23,7 +23,7 @@ index ed4747e5f..71ca937a7 100644
  }
  
  bool IsEnhancedProtectionEnabled(const PrefService& prefs) {
-@@ -276,7 +281,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
+@@ -362,7 +367,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
    registry->RegisterTimePref(
        prefs::kSafeBrowsingEsbProtegoPingWithoutTokenLastLogTime, base::Time());
    registry->RegisterBooleanPref(

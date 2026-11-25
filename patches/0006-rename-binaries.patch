@@ -32,7 +32,7 @@ index 11602df27..fc1729aa6 100755
      return 0
  
 diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
-index f1d133b6c..d933ba4f9 100644
+index e7bfa73b4..8c65434a1 100644
 --- a/chrome/BUILD.gn
 +++ b/chrome/BUILD.gn
 @@ -87,12 +87,12 @@ if (is_win) {
@@ -70,7 +70,7 @@ index f1d133b6c..d933ba4f9 100644
  
      deps = [
        ":chrome_dll_manifest",
-@@ -1854,7 +1854,7 @@ if (is_android) {
+@@ -1871,7 +1871,7 @@ if (is_android) {
  if (is_win && enable_resource_allowlist_generation) {
    generate_resource_allowlist("resource_allowlist") {
      deps = [ ":chrome_dll" ]
@@ -111,10 +111,10 @@ index e5ff01aa7..066d328d5 100644
  }  // namespace
  
 diff --git a/chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_shortcut_win.cc b/chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_shortcut_win.cc
-index 3de445a8a..03bf18a28 100644
+index c32aa5ddb..99b08759b 100644
 --- a/chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_shortcut_win.cc
 +++ b/chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_shortcut_win.cc
-@@ -44,7 +44,7 @@ base::FilePath GetChromeProxyPath() {
+@@ -42,7 +42,7 @@ base::FilePath GetChromeProxyPath() {
    if (!base::PathService::Get(base::DIR_EXE, &chrome_dir)) {
      return base::FilePath();
    }
@@ -158,7 +158,7 @@ index 1c12414f3..964b78d6a 100644
  }  // namespace
  
 diff --git a/chrome/chrome_elf/BUILD.gn b/chrome/chrome_elf/BUILD.gn
-index 5cacf4f85..9772d1730 100644
+index 7ae2b9e18..a01123d01 100644
 --- a/chrome/chrome_elf/BUILD.gn
 +++ b/chrome/chrome_elf/BUILD.gn
 @@ -49,6 +49,7 @@ static_library("test_stubs") {
@@ -170,7 +170,7 @@ index 5cacf4f85..9772d1730 100644
      "chrome_elf.def",
      "chrome_elf_main.cc",
 diff --git a/chrome/chrome_elf/chrome_elf.def b/chrome/chrome_elf/chrome_elf.def
-index 7303c69c5..03e5bd982 100644
+index ee2cee7e4..a0012a659 100644
 --- a/chrome/chrome_elf/chrome_elf.def
 +++ b/chrome/chrome_elf/chrome_elf.def
 @@ -1,7 +1,7 @@
@@ -205,10 +205,10 @@ index 04bc26d85..57f49fa02 100644
  namespace elf_sec {
  
 diff --git a/chrome/chrome_paks.gni b/chrome/chrome_paks.gni
-index 150c570d3..cf3b04e86 100644
+index 631fbe890..c43f198ad 100644
 --- a/chrome/chrome_paks.gni
 +++ b/chrome/chrome_paks.gni
-@@ -106,7 +106,7 @@ template("chrome_repack_percent") {
+@@ -122,7 +122,7 @@ template("chrome_repack_percent") {
            [ "//chrome/browser/resources/extensions_zero_state_promo:resources" ]
      }
  
@@ -284,7 +284,7 @@ index 1a6b899b4..402607931 100644
  const base::FilePath::CharType kBrowserProcessExecutablePath[] =
      FPL(PRODUCT_FULLNAME_STRING ".app/Contents/MacOS/" PRODUCT_FULLNAME_STRING);
 diff --git a/chrome/common/chrome_constants.h b/chrome/common/chrome_constants.h
-index e7b9a848b..723913b66 100644
+index 68e6a2625..54527d951 100644
 --- a/chrome/common/chrome_constants.h
 +++ b/chrome/common/chrome_constants.h
 @@ -36,9 +36,9 @@ extern const char kMacHelperSuffixAlerts[];
@@ -299,6 +299,23 @@ index e7b9a848b..723913b66 100644
  inline constexpr base::FilePath::CharType kRendererDll[] =
      FILE_PATH_LITERAL("chrome_renderer.dll");
  inline constexpr base::FilePath::CharType kStatusTrayWindowClass[] =
+diff --git a/chrome/installer/mini_installer/BUILD.gn b/chrome/installer/mini_installer/BUILD.gn
+index df9408bb1..2e5faa30e 100644
+--- a/chrome/installer/mini_installer/BUILD.gn
++++ b/chrome/installer/mini_installer/BUILD.gn
+@@ -149,9 +149,9 @@ action("mini_installer_archive") {
+   release_file = "chrome.release"
+ 
+   inputs = [
+-    "$root_out_dir/chrome.dll",
+-    "$root_out_dir/chrome_elf.dll",
+-    "$root_out_dir/chrome.exe",
++    "$root_out_dir/yatesium.dll",
++    "$root_out_dir/yatesium_elf.dll",
++    "$root_out_dir/yatesium.exe",
+     "$root_out_dir/locales/en-US.pak",
+     "$root_out_dir/setup.exe",
+     "//chrome/tools/build/win/makecab.py",
 diff --git a/chrome/installer/util/util_constants.h b/chrome/installer/util/util_constants.h
 index 825aba256..0c24e4a71 100644
 --- a/chrome/installer/util/util_constants.h
@@ -375,10 +392,10 @@ index cb5977bf1..a46564695 100644
      {L"libEGL.dll", base::DIR_MODULE},     {L"libGLESv2.dll", base::DIR_MODULE},
      {L"vulkan-1.dll", base::DIR_MODULE},   {L"advapi32.dll", base::DIR_SYSTEM},
 diff --git a/ui/base/resource/resource_bundle.cc b/ui/base/resource/resource_bundle.cc
-index 1c25647fd..906959f15 100644
+index 5c5b1441b..8171b0a02 100644
 --- a/ui/base/resource/resource_bundle.cc
 +++ b/ui/base/resource/resource_bundle.cc
-@@ -1076,13 +1076,13 @@ void ResourceBundle::LoadChromeResources() {
+@@ -1074,13 +1074,13 @@ void ResourceBundle::LoadChromeResources() {
    // 2x images. The 1x data pack only has 1x images, thus passes in an accurate
    // scale factor to gfx::ImageSkia::AddRepresentation.
    if (IsScaleFactorSupported(k100Percent)) {
@@ -394,20 +411,3 @@ index 1c25647fd..906959f15 100644
    }
  }
  
-diff --git a/chrome/installer/mini_installer/BUILD.gn b/chrome/installer/mini_installer/BUILD.gn
-index df9408bb1..2e5faa30e 100644
---- a/chrome/installer/mini_installer/BUILD.gn
-+++ b/chrome/installer/mini_installer/BUILD.gn
-@@ -149,9 +149,9 @@ action("mini_installer_archive") {
-   release_file = "chrome.release"
- 
-   inputs = [
--    "$root_out_dir/chrome.dll",
--    "$root_out_dir/chrome_elf.dll",
--    "$root_out_dir/chrome.exe",
-+    "$root_out_dir/yatesium.dll",
-+    "$root_out_dir/yatesium_elf.dll",
-+    "$root_out_dir/yatesium.exe",
-     "$root_out_dir/locales/en-US.pak",
-     "$root_out_dir/setup.exe",
-     "//chrome/tools/build/win/makecab.py",

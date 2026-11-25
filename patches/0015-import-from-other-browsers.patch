@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 814b9d649..60de87615 100644
+index 668ab11f7..87b63fcdc 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -1611,6 +1611,11 @@ source_set("core") {
+@@ -1710,6 +1710,11 @@ source_set("core") {
        "chrome_browser_main_win.cc",
        "chrome_browser_main_win.h",
        "font_prewarmer_tab_helper.cc",
@@ -15,10 +15,10 @@ index 814b9d649..60de87615 100644
        "icon_loader_win.cc",
        "memory_details_win.cc",
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index 1651c5def..87fb0a15c 100644
+index 41b28743d..36dbfad37 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
-@@ -251,6 +251,7 @@
+@@ -256,6 +256,7 @@
  #include "chrome/browser/win/browser_util.h"
  #include "chrome/browser/win/chrome_select_file_dialog_factory.h"
  #include "chrome/browser/win/parental_controls.h"
@@ -26,7 +26,7 @@ index 1651c5def..87fb0a15c 100644
  #include "ui/shell_dialogs/select_file_dialog.h"
  
  #if BUILDFLAG(USE_BROWSER_SPELLCHECKER)
-@@ -1332,6 +1333,13 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
+@@ -1364,6 +1365,13 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
      if (!base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kApp) &&
          !base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kAppId)) {
        browser_creator_->AddFirstRunTabs(master_prefs_->new_tabs);
@@ -40,7 +40,7 @@ index 1651c5def..87fb0a15c 100644
      }
    }
  #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
-@@ -1912,6 +1920,11 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+@@ -1947,6 +1955,11 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
  
    // This step is costly and is already measured in Startup.CreateFirstProfile
    // and more directly Profile.CreateAndInitializeProfile.
@@ -53,10 +53,10 @@ index 1651c5def..87fb0a15c 100644
        user_data_dir_, *base::CommandLine::ForCurrentProcess());
  
 diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-index d79e9dfdb..57d21b5ee 100644
+index 4503ab6e3..0fd3cecd1 100644
 --- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 +++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-@@ -179,6 +179,7 @@
+@@ -180,6 +180,7 @@
  
  #if BUILDFLAG(IS_WIN)
  #include "chrome/browser/ui/webui/conflicts/conflicts_ui.h"
@@ -64,7 +64,7 @@ index d79e9dfdb..57d21b5ee 100644
  #include "chrome/browser/ui/webui/default_browser/visual_guided_setter_ui.h"
  #endif  // BUILDFLAG(IS_WIN)
  
-@@ -290,6 +291,10 @@ void RegisterChromeWebUIConfigs() {
+@@ -291,6 +292,10 @@ void RegisterChromeWebUIConfigs() {
        std::make_unique<content_settings_internals::ContentSettingsUIConfig>());
    map.AddWebUIConfig(std::make_unique<ConstrainedWebDialogUIConfig>());
    map.AddWebUIConfig(std::make_unique<CreditsUIConfig>());

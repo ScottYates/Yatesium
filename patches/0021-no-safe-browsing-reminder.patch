@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/safety_hub/safe_browsing_result.cc b/chrome/browser/ui/safety_hub/safe_browsing_result.cc
-index 3dbe0687..c14c1a59 100644
+index 3dbe06879..c14c1a590 100644
 --- a/chrome/browser/ui/safety_hub/safe_browsing_result.cc
 +++ b/chrome/browser/ui/safety_hub/safe_browsing_result.cc
 @@ -121,7 +121,9 @@ base::DictValue SafetyHubSafeBrowsingResult::ToDictValue() const {

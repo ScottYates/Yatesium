@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/policy/chrome_browser_policy_connector.cc b/chrome/browser/policy/chrome_browser_policy_connector.cc
-index c8b09c3b1..98b98536c 100644
+index 539da5d78..5214320ef 100644
 --- a/chrome/browser/policy/chrome_browser_policy_connector.cc
 +++ b/chrome/browser/policy/chrome_browser_policy_connector.cc
-@@ -287,34 +287,12 @@ void ChromeBrowserPolicyConnector::SetDeviceAffiliatedIdsForTesting(
+@@ -325,34 +325,12 @@ void ChromeBrowserPolicyConnector::SetDeviceAffiliatedIdsForTesting(
  
  std::vector<std::unique_ptr<policy::ConfigurationPolicyProvider>>
  ChromeBrowserPolicyConnector::CreatePolicyProviders() {

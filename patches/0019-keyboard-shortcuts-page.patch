@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 6e1dde1c1..adea706fc 100644
+index 87b63fcdc..b3264c7ac 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -1715,6 +1715,12 @@ source_set("core") {
@@ -16,10 +16,10 @@ index 6e1dde1c1..adea706fc 100644
        "icon_loader_win.cc",
        "memory_details_win.cc",
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index 8e6a07884..ac0b07085 100644
+index 36dbfad37..ad5d6a747 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
-@@ -255,6 +255,7 @@
+@@ -257,6 +257,7 @@
  #include "chrome/browser/win/chrome_select_file_dialog_factory.h"
  #include "chrome/browser/win/parental_controls.h"
  #include "chrome/browser/yatesium_import.h"
@@ -27,7 +27,7 @@ index 8e6a07884..ac0b07085 100644
  #include "ui/shell_dialogs/select_file_dialog.h"
  
  #if BUILDFLAG(USE_BROWSER_SPELLCHECKER)
-@@ -1928,6 +1929,9 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+@@ -1959,6 +1960,9 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
    // Yatesium: a "replace everything" import from a settings file is carried
    // out here, before any profile opens its files.
    yatesium::ApplyPendingRestore(user_data_dir_);
@@ -38,10 +38,10 @@ index 8e6a07884..ac0b07085 100644
    StartupProfileInfo profile_info = CreateInitialProfile(
        user_data_dir_, *base::CommandLine::ForCurrentProcess());
 diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
-index fdd05fad3..341b0aa7c 100644
+index 4d70dcc51..f016cefc3 100644
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
-@@ -527,6 +527,7 @@
+@@ -529,6 +529,7 @@
  #include "chrome/browser/media/media_foundation_service_monitor.h"
  #include "chrome/browser/os_crypt/app_bound_encryption_provider_win.h"
  #include "chrome/browser/webnn/webnn_prefs.h"
@@ -49,7 +49,7 @@ index fdd05fad3..341b0aa7c 100644
  #include "components/os_crypt/async/browser/dpapi_key_provider.h"
  #include "components/os_crypt/async/browser/os_crypt_win.h"
  #endif  // BUILDFLAG(IS_WIN)
-@@ -1972,6 +1973,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
+@@ -2034,6 +2035,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
    registry->RegisterTimePref(prefs::kStartupLaunchInfobarLastDeclinedTime,
                               base::Time());
    registry->RegisterIntegerPref(prefs::kStartupLaunchInfobarDeclinedCount, 0);
@@ -58,37 +58,39 @@ index fdd05fad3..341b0aa7c 100644
  #endif  // BUILDFLAG(IS_WIN)
  
  #if BUILDFLAG(ENABLE_DOWNGRADE_PROCESSING)
-diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html b/chrome/browser/resources/settings/settings_menu/settings_menu.html
-index ca97d5e66..db5de479c 100644
---- a/chrome/browser/resources/settings/settings_menu/settings_menu.html
-+++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html
-@@ -1,5 +1,5 @@
-     <div role="navigation">
--      <cr-menu-selector id="menu" selectable="a:not(#extensionsLink):not(#importLink)"
-+      <cr-menu-selector id="menu" selectable="a:not(#extensionsLink):not(#importLink):not(#shortcutsLink)"
-           attr-for-selected="href" @iron-activate="${this.onIronActivate_}"
-           @click="${this.onLinkClick_}" selected-attribute="selected">
-         <a role="menuitem"
-@@ -121,6 +121,14 @@
-           <div class="cr-icon icon-external"></div>
-           <cr-ripple></cr-ripple>
-         </a>
-+        <a role="menuitem" id="shortcutsLink" class="cr-nav-menu-item"
-+            href="chrome://shortcuts" target="_blank"
-+            title="$i18n{yatesiumShortcutsTooltip}">
-+          <cr-icon icon="settings:build"></cr-icon>
-+          <span class="menu-label">$i18n{yatesiumShortcutsTitle}</span>
-+          <div class="cr-icon icon-external"></div>
-+          <cr-ripple></cr-ripple>
-+        </a>
-         <a role="menuitem" id="importLink" class="cr-nav-menu-item"
-             href="chrome://import" target="_blank"
-             title="$i18n{yatesiumImportTooltip}">
+diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html.ts b/chrome/browser/resources/settings/settings_menu/settings_menu.html.ts
+index 7b4cef94e..9a036fd47 100644
+--- a/chrome/browser/resources/settings/settings_menu/settings_menu.html.ts
++++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html.ts
+@@ -10,7 +10,7 @@ export function getHtml(this: SettingsMenuElement) {
+   return html`<!--_html_template_start_-->
+ <div role="navigation">
+   <cr-menu-selector id="menu"
+-      selectable="a:not(#extensionsLink):not(#importLink)"
++      selectable="a:not(#extensionsLink):not(#importLink):not(#shortcutsLink)"
+       attr-for-selected="href" @iron-activate="${this.onIronActivate_}"
+       @click="${this.onLinkClick_}" selected-attribute="selected">
+     ${this.settingsRefresh2026Enabled_ ? html`
+@@ -157,6 +157,14 @@ export function getHtml(this: SettingsMenuElement) {
+       <div class="cr-icon icon-external"></div>
+       <cr-ripple></cr-ripple>
+     </a>
++    <a role="menuitem" id="shortcutsLink" class="cr-nav-menu-item"
++        href="chrome://shortcuts" target="_blank"
++        title="$i18n{yatesiumShortcutsTooltip}">
++      <cr-icon icon="settings:build"></cr-icon>
++      <span class="menu-label">$i18n{yatesiumShortcutsTitle}</span>
++      <div class="cr-icon icon-external"></div>
++      <cr-ripple></cr-ripple>
++    </a>
+     <a role="menuitem" id="importLink" class="cr-nav-menu-item"
+         href="chrome://import" target="_blank"
+         title="$i18n{yatesiumImportTooltip}">
 diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.ts b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
-index f82af5a78..e2b1e5c78 100644
+index 5434f2b3f..1667a962a 100644
 --- a/chrome/browser/resources/settings/settings_menu/settings_menu.ts
 +++ b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
-@@ -133,8 +133,10 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
+@@ -145,8 +145,10 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
     * accessibility purposes, taps are handled separately.
     */
    protected onLinkClick_(event: Event) {
@@ -102,10 +104,10 @@ index f82af5a78..e2b1e5c78 100644
      }
    }
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index 88668a0b3..841ea36f8 100644
+index 9469400d3..9372f6356 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -1102,7 +1102,10 @@ if (!is_android) {
+@@ -1094,7 +1094,10 @@ if (!is_android) {
  source_set("accelerator_table") {
    public = [ "accelerator_table.h" ]
    sources = [ "accelerator_table.cc" ]
@@ -219,10 +221,10 @@ index 6b9b99fad..658f6c704 100644
  void ClearAcceleratorListForTesting();
  
 diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
-index 764e29529..44f0bb7a9 100644
+index 0dabb7764..0a76dfb92 100644
 --- a/chrome/browser/ui/views/frame/browser_view.cc
 +++ b/chrome/browser/ui/views/frame/browser_view.cc
-@@ -413,6 +413,7 @@
+@@ -415,6 +415,7 @@
  #include "chrome/browser/taskbar/taskbar_decorator_win.h"
  #include "chrome/browser/win/jumplist.h"
  #include "chrome/browser/win/jumplist_factory.h"
@@ -230,7 +232,7 @@ index 764e29529..44f0bb7a9 100644
  #include "ui/gfx/color_palette.h"
  #include "ui/gfx/win/hwnd_util.h"
  #include "ui/native_theme/native_theme_win.h"
-@@ -3262,6 +3263,16 @@ content::KeyboardEventProcessingResult BrowserView::PreHandleKeyboardEvent(
+@@ -3303,6 +3304,16 @@ content::KeyboardEventProcessingResult BrowserView::PreHandleKeyboardEvent(
      return content::KeyboardEventProcessingResult::NOT_HANDLED;
    }
  
@@ -247,7 +249,7 @@ index 764e29529..44f0bb7a9 100644
    ui::Accelerator accelerator =
        ui::GetAcceleratorFromNativeWebKeyboardEvent(event);
  
-@@ -5100,6 +5111,11 @@ void BrowserView::AddedToWidget() {
+@@ -5154,6 +5165,11 @@ void BrowserView::AddedToWidget() {
  #endif
  
    LoadAccelerators();
@@ -259,7 +261,7 @@ index 764e29529..44f0bb7a9 100644
  
    // ImmersiveModeController may depend on the presence of a Widget, so it
    // is initialized here.
-@@ -5759,6 +5775,33 @@ void BrowserView::LoadAccelerators() {
+@@ -5839,6 +5855,33 @@ void BrowserView::LoadAccelerators() {
  #endif
  }
  
@@ -294,10 +296,10 @@ index 764e29529..44f0bb7a9 100644
  #if BUILDFLAG(IS_WIN)
    switch (app_command_id) {
 diff --git a/chrome/browser/ui/views/frame/browser_view.h b/chrome/browser/ui/views/frame/browser_view.h
-index 750e46c97..6cbabda34 100644
+index 39f1b1c43..cd0dabbd3 100644
 --- a/chrome/browser/ui/views/frame/browser_view.h
 +++ b/chrome/browser/ui/views/frame/browser_view.h
-@@ -976,6 +976,10 @@ class BrowserView : public BrowserWindow,
+@@ -985,6 +985,10 @@ class BrowserView : public BrowserWindow,
    // use.
    void LoadAccelerators();
  
@@ -308,7 +310,7 @@ index 750e46c97..6cbabda34 100644
    // Retrieves the command id for the specified Windows app command.
    int GetCommandIDForAppCommandID(int app_command_id) const;
  
-@@ -1263,6 +1267,9 @@ class BrowserView : public BrowserWindow,
+@@ -1272,6 +1276,9 @@ class BrowserView : public BrowserWindow,
    // A mapping between accelerators and command IDs.
    std::map<ui::Accelerator, int> accelerator_table_;
  
@@ -319,7 +321,7 @@ index 750e46c97..6cbabda34 100644
    bool initialized_ = false;
  
 diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-index c018dfafd..da6383ed4 100644
+index 0fd3cecd1..de29876c2 100644
 --- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 +++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 @@ -181,6 +181,7 @@
@@ -340,10 +342,10 @@ index c018dfafd..da6383ed4 100644
    map.AddWebUIConfig(std::make_unique<DataSharingInternalsUIConfig>());
    map.AddWebUIConfig(std::make_unique<DownloadInternalsUIConfig>());
 diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-index 22a76a68d..81346d1f8 100644
+index ee3c6b7b0..9510afe1d 100644
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -4430,6 +4430,10 @@ void AddExtensionsStrings(content::WebUIDataSource* html_source) {
+@@ -4459,6 +4459,10 @@ void AddExtensionsStrings(content::WebUIDataSource* html_source) {
    html_source->AddString(
        "yatesiumImportTooltip",
        u"Import from another browser, or export and import a settings file");

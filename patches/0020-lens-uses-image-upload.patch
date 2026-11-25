@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/lens/lens_search_controller.cc b/chrome/browser/ui/lens/lens_search_controller.cc
-index 5993f406..ec4a344a 100644
+index 5993f4064..ec4a344a4 100644
 --- a/chrome/browser/ui/lens/lens_search_controller.cc
 +++ b/chrome/browser/ui/lens/lens_search_controller.cc
 @@ -6,6 +6,7 @@

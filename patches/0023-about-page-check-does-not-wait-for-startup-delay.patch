@@ -1,5 +1,5 @@
 diff --git a/chrome/yatesium_update/yatesium_update.cc b/chrome/yatesium_update/yatesium_update.cc
-index 4286662..2d81700 100644
+index 42866621b..2d817007e 100644
 --- a/chrome/yatesium_update/yatesium_update.cc
 +++ b/chrome/yatesium_update/yatesium_update.cc
 @@ -812,8 +812,7 @@ bool Update(const std::wstring& install_dir,

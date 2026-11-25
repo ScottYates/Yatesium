@@ -1,34 +1,37 @@
-diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html b/chrome/browser/resources/settings/settings_menu/settings_menu.html
-index c35c985dd..ca97d5e66 100644
---- a/chrome/browser/resources/settings/settings_menu/settings_menu.html
-+++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html
-@@ -1,5 +1,5 @@
-     <div role="navigation">
--      <cr-menu-selector id="menu" selectable="a:not(#extensionsLink)"
-+      <cr-menu-selector id="menu" selectable="a:not(#extensionsLink):not(#importLink)"
-           attr-for-selected="href" @iron-activate="${this.onIronActivate_}"
-           @click="${this.onLinkClick_}" selected-attribute="selected">
-         <a role="menuitem"
-@@ -121,6 +121,14 @@
-           <div class="cr-icon icon-external"></div>
-           <cr-ripple></cr-ripple>
-         </a>
-+        <a role="menuitem" id="importLink" class="cr-nav-menu-item"
-+            href="chrome://import" target="_blank"
-+            title="$i18n{yatesiumImportTooltip}">
-+          <cr-icon icon="cr:sync"></cr-icon>
-+          <span class="menu-label">$i18n{yatesiumImportTitle}</span>
-+          <div class="cr-icon icon-external"></div>
-+          <cr-ripple></cr-ripple>
-+        </a>
-         <a role="menuitem" id="about-menu" href="/help"
-             class="cr-nav-menu-item">
-           <cr-icon icon="cr:chrome-product"></cr-icon>
+diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html.ts b/chrome/browser/resources/settings/settings_menu/settings_menu.html.ts
+index a2dd519d2..7b4cef94e 100644
+--- a/chrome/browser/resources/settings/settings_menu/settings_menu.html.ts
++++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html.ts
+@@ -9,7 +9,8 @@ import type {SettingsMenuElement} from './settings_menu.js';
+ export function getHtml(this: SettingsMenuElement) {
+   return html`<!--_html_template_start_-->
+ <div role="navigation">
+-  <cr-menu-selector id="menu" selectable="a:not(#extensionsLink)"
++  <cr-menu-selector id="menu"
++      selectable="a:not(#extensionsLink):not(#importLink)"
+       attr-for-selected="href" @iron-activate="${this.onIronActivate_}"
+       @click="${this.onLinkClick_}" selected-attribute="selected">
+     ${this.settingsRefresh2026Enabled_ ? html`
+@@ -156,6 +157,14 @@ export function getHtml(this: SettingsMenuElement) {
+       <div class="cr-icon icon-external"></div>
+       <cr-ripple></cr-ripple>
+     </a>
++    <a role="menuitem" id="importLink" class="cr-nav-menu-item"
++        href="chrome://import" target="_blank"
++        title="$i18n{yatesiumImportTooltip}">
++      <cr-icon icon="cr:sync"></cr-icon>
++      <span class="menu-label">$i18n{yatesiumImportTitle}</span>
++      <div class="cr-icon icon-external"></div>
++      <cr-ripple></cr-ripple>
++    </a>
+     <a role="menuitem" id="about-menu" href="/help" class="cr-nav-menu-item">
+       <cr-icon icon="cr:chrome-product"></cr-icon>
+       <span class="menu-label">$i18n{aboutPageTitle}</span>
 diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.ts b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
-index 931eefe24..f82af5a78 100644
+index 3d6f848d2..5434f2b3f 100644
 --- a/chrome/browser/resources/settings/settings_menu/settings_menu.ts
 +++ b/chrome/browser/resources/settings/settings_menu/settings_menu.ts
-@@ -133,7 +133,8 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
+@@ -145,7 +145,8 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
     * accessibility purposes, taps are handled separately.
     */
    protected onLinkClick_(event: Event) {
@@ -39,10 +42,10 @@ index 931eefe24..f82af5a78 100644
      }
    }
 diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-index f64a52f56..2c80e83ee 100644
+index ca5d27291..ee3c6b7b0 100644
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -4518,6 +4518,11 @@ void AddSystemStrings(content::WebUIDataSource* html_source) {
+@@ -4454,6 +4454,11 @@ void AddSystemStrings(content::WebUIDataSource* html_source) {
  void AddExtensionsStrings(content::WebUIDataSource* html_source) {
    html_source->AddLocalizedString("extensionsPageTitle",
                                    IDS_SETTINGS_EXTENSIONS_CHECKBOX_LABEL);

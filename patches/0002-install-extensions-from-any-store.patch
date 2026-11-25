@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/download/download_crx_util.cc b/chrome/browser/download/download_crx_util.cc
-index 77e32a02..d6c5f3e6 100644
+index d6c2c8d29..951fbf7cc 100644
 --- a/chrome/browser/download/download_crx_util.cc
 +++ b/chrome/browser/download/download_crx_util.cc
 @@ -90,9 +90,9 @@ std::unique_ptr<ExtensionInstallPrompt> CreateExtensionInstallPrompt(
@@ -16,7 +16,7 @@ index 77e32a02..d6c5f3e6 100644
  
  // Tests can call this method to inject a mock ExtensionInstallPrompt
 diff --git a/extensions/browser/extension_util.cc b/extensions/browser/extension_util.cc
-index 257e48e2..92316268 100644
+index dcaa2314a..cf62d97f6 100644
 --- a/extensions/browser/extension_util.cc
 +++ b/extensions/browser/extension_util.cc
 @@ -8,6 +8,7 @@
@@ -27,7 +27,7 @@ index 257e48e2..92316268 100644
  #include "base/no_destructor.h"
  #include "base/strings/string_util.h"
  #include "build/chromeos_buildflags.h"
-@@ -613,6 +614,20 @@ bool IsExtensionDownload(const download::DownloadItem& download_item) {
+@@ -658,6 +659,20 @@ bool IsExtensionDownload(const download::DownloadItem& download_item) {
    if (download_item.GetMimeType() == Extension::kMimeType) {
      return true;
    }

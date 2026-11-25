@@ -1,8 +1,8 @@
 diff --git a/components/variations/service/variations_service.cc b/components/variations/service/variations_service.cc
-index d96dc4596..efbb2cab7 100644
+index b65a0d355..f69d7cf3f 100644
 --- a/components/variations/service/variations_service.cc
 +++ b/components/variations/service/variations_service.cc
-@@ -282,12 +282,9 @@ bool IsFetchingEnabled() {
+@@ -296,12 +296,9 @@ bool IsFetchingEnabled() {
      return false;
    }
  #else

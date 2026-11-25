@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/startup/infobar_utils.cc b/chrome/browser/ui/startup/infobar_utils.cc
-index 598e361a..36fc31f0 100644
+index 94d977bdf..9b7866bd8 100644
 --- a/chrome/browser/ui/startup/infobar_utils.cc
 +++ b/chrome/browser/ui/startup/infobar_utils.cc
 @@ -253,19 +253,8 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,

@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/prefs/chrome_pref_service_factory.cc b/chrome/browser/prefs/chrome_pref_service_factory.cc
-index cd4f964e..df77367c 100644
+index 79b381ab8..b86c5d114 100644
 --- a/chrome/browser/prefs/chrome_pref_service_factory.cc
 +++ b/chrome/browser/prefs/chrome_pref_service_factory.cc
 @@ -226,7 +226,10 @@ SettingsEnforcementGroup GetSettingsEnforcementGroup() {
@@ -15,7 +15,7 @@ index cd4f964e..df77367c 100644
    return GROUP_NO_ENFORCEMENT;
  #endif
 diff --git a/chrome/common/chrome_paths_win.cc b/chrome/common/chrome_paths_win.cc
-index 9ab34278..1b744bb7 100644
+index 9ab342785..1b744bb75 100644
 --- a/chrome/common/chrome_paths_win.cc
 +++ b/chrome/common/chrome_paths_win.cc
 @@ -9,6 +9,7 @@
@@ -47,11 +47,11 @@ index 9ab34278..1b744bb7 100644
      return false;
    *result = result->Append(install_static::GetChromeInstallSubDirectory());
 diff --git a/chrome/install_static/user_data_dir.cc b/chrome/install_static/user_data_dir.cc
-index 6b231841..432af9b4 100644
+index e86bb6f72..75636b790 100644
 --- a/chrome/install_static/user_data_dir.cc
 +++ b/chrome/install_static/user_data_dir.cc
-@@ -71,6 +71,34 @@ bool GetUserDataDirectoryUsingProcessCommandLine(
-                                   invalid_supplied_directory);
+@@ -74,6 +74,34 @@ bool GetUserDataDirectoryUsingProcessCommandLine(
+                                   invalid_supplied_directory, policy_set);
  }
  
 +// Yatesium: populates |result| with "<directory of the exe>\Data\User Data".
@@ -85,7 +85,7 @@ index 6b231841..432af9b4 100644
  // Populates |result| with the default User Data directory for the current
  // user. Returns false if all attempts at locating a User Data directory fail.
  // TODO(ananta)
-@@ -78,6 +106,17 @@ bool GetUserDataDirectoryUsingProcessCommandLine(
+@@ -81,6 +109,17 @@ bool GetUserDataDirectoryUsingProcessCommandLine(
  // Unify this with the Browser Distribution code.
  bool GetDefaultUserDataDirectory(const InstallConstants& mode,
                                   std::wstring* result) {

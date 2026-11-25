@@ -1,5 +1,5 @@
 diff --git a/extensions/browser/manifest_v2_handler.cc b/extensions/browser/manifest_v2_handler.cc
-index 5841d3df..d6d412d3 100644
+index 5841d3dfb..d6d412d3e 100644
 --- a/extensions/browser/manifest_v2_handler.cc
 +++ b/extensions/browser/manifest_v2_handler.cc
 @@ -114,7 +114,8 @@ bool ShouldDisableLegacyExtensions() {
@@ -13,7 +13,7 @@ index 5841d3df..d6d412d3 100644
  
  }  // namespace
 diff --git a/extensions/browser/manifest_v2_util.cc b/extensions/browser/manifest_v2_util.cc
-index 08d7786b..0845798a 100644
+index 08d7786b3..0845798a1 100644
 --- a/extensions/browser/manifest_v2_util.cc
 +++ b/extensions/browser/manifest_v2_util.cc
 @@ -20,28 +20,9 @@ bool IsExtensionAffected(const Extension& extension) {
@@ -49,7 +49,7 @@ index 08d7786b..0845798a 100644
  
  }  // namespace extensions::manifest_v2_util
 diff --git a/extensions/common/extension.cc b/extensions/common/extension.cc
-index 28a3cac3..19e6a892 100644
+index 28a3cac37..19e6a8929 100644
 --- a/extensions/common/extension.cc
 +++ b/extensions/common/extension.cc
 @@ -97,12 +97,7 @@ bool IsManifestSupported(int manifest_version,
