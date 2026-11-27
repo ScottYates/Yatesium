@@ -284,18 +284,25 @@ Things to know:
 
 ## Updates
 
-On start the browser runs `yatesium_update.exe --auto` from its own folder,
-with no window. The updater does this:
+The browser looks for a newer release twice a day and asks before it
+downloads anything.
 
-1. At most once a day, downloads `latest.txt` from the latest release of this
-   repository. The file holds the release's version and the SHA-256 of its
-   zip. This is the only request made when there is nothing new.
-2. If the release is newer than `version.txt`, downloads the zip to
-   `Data\Update` and checks it against that SHA-256. A zip that does not
-   match is discarded.
-3. Waits until every `yatesium.exe` from this folder has closed, then moves
-   the old program files out and the new ones in. If that fails part way,
-   the old files are moved back. `Data` is not touched.
+1. About a minute after it starts, and then whenever the last check is 12
+   hours old, the browser runs `yatesium_update.exe --check` from its own
+   folder, with no window. This downloads `latest.txt` from the latest release
+   of this repository. The file holds the release's version and the SHA-256 of
+   its zip. This is the only request the check makes. A check that gets no
+   answer, for example with no network, is tried again half an hour later.
+2. If the release is newer than `version.txt`, every window shows a bar:
+   "Yatesium <version> is available", with an "Update" button. Closing the bar
+   puts the question off until the next check, or the next start of the
+   browser.
+3. "Update" opens the About page, which does the rest: it downloads the zip to
+   `Data\Update`, checks it against the SHA-256 (a zip that does not match is
+   discarded), and then shows a "Relaunch" button.
+4. The updater waits until every `yatesium.exe` from this folder has closed,
+   then moves the old program files out and the new ones in. If that fails
+   part way, the old files are moved back. `Data` is not touched.
 
 The next start runs the new version. `Data\Update\update.log` records what
 happened.
@@ -308,10 +315,10 @@ happened.
   windows.
 - The About page also shows the Yatesium build next to the Chromium version:
   version with revision, the commit it was built from, and the build date.
-- Running `yatesium_update.exe` by hand does the same check and reports in a
-  console window.
-- To turn automatic updates off, create an empty file `Data\no-update.txt`.
-  The About page still checks when you open it. Deleting
+- Running `yatesium_update.exe` by hand checks, downloads and installs in the
+  same way, and reports in a console window.
+- To turn the automatic check and its bar off, create an empty file
+  `Data\no-update.txt`. The About page still checks when you open it. Deleting
   `yatesium_update.exe` turns both off.
 
 The updater is a small C++ program built with the browser
@@ -489,6 +496,7 @@ only the files they touch are recompiled.
 | `patches/0021` | The menu does not show the "Safe Browsing is off" reminder |
 | `patches/0022` | "Relaunch" after an update also brings back app (PWA) windows |
 | `patches/0023` | The update check on the About page does not wait for the automatic check's start-up delay |
+| `patches/0024` | Twice-daily update check that shows an "Update" bar instead of downloading on its own |
 | `scripts/make_branding.py` | Regenerates the files in `branding/` |
 | `scripts/check_patches.py` | Checks the changes against a Chromium version |
 | `flags.gn` | Build arguments |

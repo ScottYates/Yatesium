@@ -1,0 +1,483 @@
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index b3264c7a..524e004f 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1721,6 +1721,10 @@ source_set("core") {
+       "yatesium_shortcuts.cc",
+       "yatesium_shortcuts.h",
+ 
++      # Yatesium: tells the user when a newer release is available.
++      "yatesium_update_notifier.cc",
++      "yatesium_update_notifier.h",
++
+       "fullscreen_win.cc",
+       "icon_loader_win.cc",
+       "memory_details_win.cc",
+diff --git a/chrome/browser/chrome_browser_main_win.cc b/chrome/browser/chrome_browser_main_win.cc
+index 59d7f5b5..596a5a4e 100644
+--- a/chrome/browser/chrome_browser_main_win.cc
++++ b/chrome/browser/chrome_browser_main_win.cc
+@@ -89,6 +89,7 @@
+ #include "chrome/browser/win/isolated_browser/isolated_browser_support.h"
+ #include "chrome/browser/win/remove_app_compat_entries.h"
+ #include "chrome/browser/win/util_win_service.h"
++#include "chrome/browser/yatesium_update_notifier.h"
+ #include "chrome/common/channel_info.h"
+ #include "chrome/common/chrome_constants.h"
+ #include "chrome/common/chrome_features.h"
+@@ -778,30 +779,11 @@ void ChromeBrowserMainPartsWin::PostProfileInit(Profile* profile,
+   }
+ }
+ 
+-// Yatesium: starts the updater that ships next to the executable. It checks
+-// for a newer release, downloads it, and swaps the files in after the browser
+-// has closed. Nothing happens if the updater is not there.
+-static void StartYatesiumUpdater() {
+-  base::FilePath exe_dir;
+-  if (!base::PathService::Get(base::DIR_EXE, &exe_dir)) {
+-    return;
+-  }
+-  const base::FilePath updater = exe_dir.Append(L"yatesium_update.exe");
+-  if (!base::PathExists(updater)) {
+-    return;
+-  }
+-  const std::wstring command_line = L"\"" + updater.value() + L"\" --auto";
+-  base::LaunchOptions options;
+-  options.start_hidden = true;
+-  base::LaunchProcess(command_line, options);
+-}
+-
+ void ChromeBrowserMainPartsWin::PostBrowserStart() {
+   ChromeBrowserMainParts::PostBrowserStart();
+ 
+-  base::ThreadPool::PostTask(
+-      FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
+-      base::BindOnce(&StartYatesiumUpdater));
++  // Yatesium: looks for a newer release twice a day and tells the user.
++  yatesium::StartUpdateNotifier();
+ 
+   // Verify that the delay load helper hooks are in place. This cannot be tested
+   // from unit tests, so rely on this failing here.
+diff --git a/chrome/browser/yatesium_update_notifier.cc b/chrome/browser/yatesium_update_notifier.cc
+new file mode 100644
+index 00000000..13d5bc57
+--- /dev/null
++++ b/chrome/browser/yatesium_update_notifier.cc
+@@ -0,0 +1,228 @@
++// Yatesium: tells the user when a newer release is available. See
++// yatesium_update_notifier.h.
++
++#include "chrome/browser/yatesium_update_notifier.h"
++
++#include <memory>
++#include <string>
++#include <utility>
++
++#include "base/base_paths.h"
++#include "base/files/file.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
++#include "base/path_service.h"
++#include "base/process/launch.h"
++#include "base/process/process.h"
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/task_traits.h"
++#include "base/task/thread_pool.h"
++#include "base/time/time.h"
++#include "chrome/browser/devtools/global_confirm_info_bar.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
++#include "chrome/browser/ui/chrome_pages.h"
++#include "components/infobars/core/confirm_infobar_delegate.h"
++#include "components/infobars/core/infobar_delegate.h"
++#include "content/public/browser/browser_task_traits.h"
++#include "content/public/browser/browser_thread.h"
++
++namespace yatesium {
++
++namespace {
++
++// The first look happens this long after the browser has started.
++constexpr base::TimeDelta kStartDelay = base::Seconds(60);
++// How often the notifier wakes up to see whether a check is due. A check that
++// failed, for example with no network, is tried again at the next wake-up.
++constexpr base::TimeDelta kWakeInterval = base::Minutes(30);
++// A check is due when the last one that got an answer is this old.
++constexpr base::TimeDelta kCheckInterval = base::Hours(12);
++// The updater normally answers within seconds.
++constexpr base::TimeDelta kCheckTimeout = base::Minutes(2);
++
++struct CheckOutcome {
++  // The newer release, such as "159.0.8154.34-2". Empty if there is none.
++  std::string available_version;
++  // True if the updater was run just now and got an answer.
++  bool checked_now = false;
++};
++
++// Reads the first line of a small text file.
++std::string ReadFirstLine(const base::FilePath& path) {
++  std::string text;
++  if (!base::ReadFileToStringWithMaxSize(path, &text, 4096)) {
++    return std::string();
++  }
++  const size_t end = text.find_first_of("\r\n");
++  if (end != std::string::npos) {
++    text.resize(end);
++  }
++  return std::string(base::TrimWhitespaceASCII(text, base::TRIM_ALL));
++}
++
++// A version is digits with dots and one dash, such as "159.0.8154.34-2".
++// Anything else is not shown to the user.
++bool LooksLikeVersion(const std::string& text) {
++  if (text.empty() || text.size() > 40) {
++    return false;
++  }
++  for (char c : text) {
++    if (!base::IsAsciiDigit(c) && c != '.' && c != '-') {
++      return false;
++    }
++  }
++  return true;
++}
++
++// Runs the updater's check if one is due, then reads what the last check
++// found. Does file access and waits for the updater: runs on the thread pool.
++CheckOutcome CheckIfDue() {
++  CheckOutcome outcome;
++  base::FilePath install_dir;
++  if (!base::PathService::Get(base::DIR_EXE, &install_dir)) {
++    return outcome;
++  }
++  const base::FilePath updater = install_dir.Append(L"yatesium_update.exe");
++  const base::FilePath data_dir = install_dir.AppendASCII("Data");
++  if (!base::PathExists(updater) ||
++      base::PathExists(data_dir.AppendASCII("no-update.txt"))) {
++    return outcome;
++  }
++  const base::FilePath update_dir = data_dir.AppendASCII("Update");
++
++  // The updater rewrites this file whenever a check gets an answer, also for
++  // a check from the About page.
++  const base::FilePath stamp_path = update_dir.AppendASCII("last-check.txt");
++  const base::Time now = base::Time::Now();
++  base::File::Info stamp;
++  const bool has_stamp = base::GetFileInfo(stamp_path, &stamp);
++  const bool due = !has_stamp || stamp.last_modified > now ||
++                   now - stamp.last_modified >= kCheckInterval;
++  if (due) {
++    const std::wstring command_line = L"\"" + updater.value() + L"\" --check";
++    base::LaunchOptions options;
++    options.start_hidden = true;
++    const base::Process process = base::LaunchProcess(command_line, options);
++    int exit_code = 0;
++    if (process.IsValid() &&
++        process.WaitForExitWithTimeout(kCheckTimeout, &exit_code)) {
++      // The check counts only if it got an answer. It gets none without a
++      // network, or while another updater is at work in this folder.
++      base::File::Info new_stamp;
++      outcome.checked_now =
++          base::GetFileInfo(stamp_path, &new_stamp) &&
++          (!has_stamp || new_stamp.last_modified != stamp.last_modified);
++    }
++  }
++
++  // "available <version>", "uptodate <version>" or "failed <reason>".
++  const std::string result = ReadFirstLine(update_dir.AppendASCII("check.txt"));
++  const std::string prefix = "available ";
++  if (!base::StartsWith(result, prefix)) {
++    return outcome;
++  }
++  const std::string version = result.substr(prefix.size());
++  // After the update is installed the old answer is still in the file.
++  if (!LooksLikeVersion(version) ||
++      version == ReadFirstLine(install_dir.AppendASCII("version.txt"))) {
++    return outcome;
++  }
++  outcome.available_version = version;
++  return outcome;
++}
++
++// The bar that every window shows. "Update" opens the About page, which does
++// the download. The close button puts the question off until the next check.
++class UpdateInfoBarDelegate : public ConfirmInfoBarDelegate {
++ public:
++  explicit UpdateInfoBarDelegate(const std::string& version)
++      : version_(base::ASCIIToUTF16(version)) {}
++  UpdateInfoBarDelegate(const UpdateInfoBarDelegate&) = delete;
++  UpdateInfoBarDelegate& operator=(const UpdateInfoBarDelegate&) = delete;
++  ~UpdateInfoBarDelegate() override = default;
++
++  // ConfirmInfoBarDelegate:
++  infobars::InfoBarDelegate::InfoBarIdentifier GetIdentifier() const override {
++    // The identifier is only used for Chromium's statistics, which Yatesium
++    // does not send. An existing value is used so that this file does not
++    // have to change Chromium's list, which grows with every release.
++    return TEST_INFOBAR;
++  }
++  std::u16string GetMessageText() const override {
++    return u"Yatesium " + version_ + u" is available.";
++  }
++  int GetButtons() const override { return BUTTON_OK; }
++  std::u16string GetButtonLabel(InfoBarButton button) const override {
++    return u"Update";
++  }
++  bool ShouldExpire(const NavigationDetails& details) const override {
++    return false;
++  }
++  bool Accept() override {
++    BrowserWindowInterface* browser =
++        GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
++    if (browser) {
++      chrome::ShowAboutChrome(browser);
++    }
++    return true;
++  }
++
++ private:
++  const std::u16string version_;
++};
++
++struct NotifierState {
++  // The bar, while it is showing.
++  base::WeakPtr<GlobalConfirmInfoBar> infobar;
++  // True once the bar has been shown since the browser started.
++  bool shown = false;
++};
++
++NotifierState& GetState() {
++  static base::NoDestructor<NotifierState> state;
++  return *state;
++}
++
++void WakeUp();
++
++void OnChecked(CheckOutcome outcome) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  NotifierState& state = GetState();
++  // The bar comes up once after the browser starts and again after each new
++  // check, so a closed bar returns about twice a day.
++  if (!outcome.available_version.empty() && !state.infobar &&
++      (outcome.checked_now || !state.shown)) {
++    state.shown = true;
++    state.infobar = GlobalConfirmInfoBar::Show(
++                        std::make_unique<UpdateInfoBarDelegate>(
++                            outcome.available_version))
++                        ->GetWeakPtr();
++  }
++  content::GetUIThreadTaskRunner({})->PostDelayedTask(
++      FROM_HERE, base::BindOnce(&WakeUp), kWakeInterval);
++}
++
++void WakeUp() {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE,
++      {base::MayBlock(), base::WithBaseSyncPrimitives(),
++       base::TaskPriority::BEST_EFFORT,
++       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
++      base::BindOnce(&CheckIfDue), base::BindOnce(&OnChecked));
++}
++
++}  // namespace
++
++void StartUpdateNotifier() {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  content::GetUIThreadTaskRunner({})->PostDelayedTask(
++      FROM_HERE, base::BindOnce(&WakeUp), kStartDelay);
++}
++
++}  // namespace yatesium
+diff --git a/chrome/browser/yatesium_update_notifier.h b/chrome/browser/yatesium_update_notifier.h
+new file mode 100644
+index 00000000..84168949
+--- /dev/null
++++ b/chrome/browser/yatesium_update_notifier.h
+@@ -0,0 +1,23 @@
++// Yatesium: tells the user when a newer release is available.
++//
++// Twice a day, while the browser runs, the updater that ships next to the
++// browser (yatesium_update.exe --check) looks for a newer release. It
++// downloads nothing. If there is one, every window shows a bar that names
++// the version and has an "Update" button. The button opens the About page,
++// which downloads the release, installs it when the browser closes, and
++// offers to relaunch.
++//
++// An empty file Data\no-update.txt turns the check off.
++
++#ifndef CHROME_BROWSER_YATESIUM_UPDATE_NOTIFIER_H_
++#define CHROME_BROWSER_YATESIUM_UPDATE_NOTIFIER_H_
++
++namespace yatesium {
++
++// Starts the checks. Call once, on the UI thread, after the browser has
++// started.
++void StartUpdateNotifier();
++
++}  // namespace yatesium
++
++#endif  // CHROME_BROWSER_YATESIUM_UPDATE_NOTIFIER_H_
+diff --git a/chrome/yatesium_update/yatesium_update.cc b/chrome/yatesium_update/yatesium_update.cc
+index 2d817007..8f0e53d2 100644
+--- a/chrome/yatesium_update/yatesium_update.cc
++++ b/chrome/yatesium_update/yatesium_update.cc
+@@ -4,11 +4,18 @@
+ // SHA-256, and replaces the program files once the browser is closed. The
+ // Data folder is never touched, apart from the Data\Update working folder.
+ //
+-//   yatesium_update.exe --auto   Started by the browser. Checks at most once
+-//                                a day, shows nothing, and waits for the
+-//                                browser to close before it updates.
+-//   yatesium_update.exe --now    Started by the browser's About page. Like
+-//                                --auto, but checks right away.
++//   yatesium_update.exe --check  Started by the browser twice a day. Only
++//                                looks whether a newer release exists and
++//                                writes the answer to Data\Update\check.txt:
++//                                "available <version>", "uptodate <version>"
++//                                or "failed <reason>". Downloads nothing.
++//                                The browser then tells the user.
++//   yatesium_update.exe --now    Started by the browser's About page. Checks
++//                                right away, downloads a newer release,
++//                                shows nothing, and waits for the browser to
++//                                close before it updates.
++//   yatesium_update.exe --auto   Like --now, but checks at most once a day.
++//                                The browser no longer uses it.
+ //   yatesium_update.exe          Checks now and reports in a console window.
+ //
+ // Progress is written to Data\Update\state.txt for the About page:
+@@ -16,7 +23,7 @@
+ // "ready <version>" or "failed <reason>". If the file Data\Update\relaunch
+ // exists when the update has been installed, the browser is started again.
+ //
+-// To turn automatic updates off, create an empty file Data\no-update.txt.
++// To turn the automatic check off, create an empty file Data\no-update.txt.
+ //
+ // The program uses only the Windows API and the zip reader from zlib.
+ 
+@@ -47,9 +54,12 @@ const wchar_t kUserAgent[] = L"Yatesium-Updater";
+ bool g_auto = false;
+ // True with --now: no start-up delay and no once-a-day limit.
+ bool g_now = false;
++// True with --check: only find out whether a newer release exists.
++bool g_check = false;
+ HANDLE g_console = nullptr;
+ std::wstring g_log_path;
+ std::wstring g_state_path;
++std::wstring g_check_path;
+ std::wstring g_relaunch_path;
+ 
+ // ---------------------------------------------------------------------------
+@@ -285,6 +295,13 @@ void WriteState(const std::wstring& state) {
+   }
+ }
+ 
++// Tells the browser what a --check run found.
++void WriteCheck(const std::wstring& result) {
++  if (!g_check_path.empty()) {
++    WriteSmallFile(g_check_path, ToUtf8(result));
++  }
++}
++
+ // Reads the version from a version.txt file.
+ bool ReadVersionFile(const std::wstring& path, std::wstring* text) {
+   std::string content;
+@@ -804,21 +821,26 @@ bool Update(const std::wstring& install_dir,
+ 
+   // Leftovers of an earlier update, such as the old copy of this program
+   // that could not be deleted while it was running.
+-  for (const std::wstring& name : ListDir(work_dir)) {
+-    if (name == L"new" || name.compare(0, 4, L"old-") == 0) {
+-      RemoveTree(work_dir + L"\\" + name);
++  // A --check run changes nothing but its own result file.
++  if (!g_check) {
++    for (const std::wstring& name : ListDir(work_dir)) {
++      if (name == L"new" || name.compare(0, 4, L"old-") == 0) {
++        RemoveTree(work_dir + L"\\" + name);
++      }
+     }
+   }
+ 
+   const std::wstring stamp_path = work_dir + L"\\last-check.txt";
+-  if (g_auto && !g_now) {
++  if (g_auto && !g_now && !g_check) {
+     // Check at most once a day.
+     double hours = HoursSinceWritten(stamp_path);
+     if (hours >= 0 && hours < 24) {
+       return true;
+     }
+   }
+-  WriteState(L"checking");
++  if (!g_check) {
++    WriteState(L"checking");
++  }
+ 
+   // latest.txt holds one line: "<version> <SHA-256 of the zip>".
+   std::string latest_body;
+@@ -843,7 +865,16 @@ bool Update(const std::wstring& install_dir,
+   }
+   if (!IsNewer(latest, current)) {
+     Say(L"Yatesium " + current_text + L" is up to date.");
+-    WriteState(L"uptodate " + current_text);
++    if (g_check) {
++      WriteCheck(L"uptodate " + current_text);
++    } else {
++      WriteState(L"uptodate " + current_text);
++    }
++    return true;
++  }
++  if (g_check) {
++    // The browser tells the user. The download starts from the About page.
++    WriteCheck(L"available " + latest_text);
+     return true;
+   }
+   if (expected_hash.size() != 64 ||
+@@ -932,7 +963,8 @@ bool Update(const std::wstring& install_dir,
+ int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t* command_line, int) {
+   const std::wstring arguments = command_line ? command_line : L"";
+   g_now = arguments.find(L"--now") != std::wstring::npos;
+-  g_auto = g_now || arguments.find(L"--auto") != std::wstring::npos;
++  g_check = arguments.find(L"--check") != std::wstring::npos;
++  g_auto = g_now || g_check || arguments.find(L"--auto") != std::wstring::npos;
+ 
+   std::wstring release_base = kReleaseBase;
+ #if defined(YATESIUM_UPDATE_TEST_SOURCE)
+@@ -957,7 +989,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t* command_line, int) {
+     g_console = GetStdHandle(STD_OUTPUT_HANDLE);
+   }
+ 
+-  if (g_auto && !g_now) {
++  if (g_auto && !g_now && !g_check) {
+     // The automatic check lets the browser finish starting first. It waits
+     // before it takes the lock, so that a check from the About page in that
+     // time starts at once. There is nothing to wait for if today's check is
+@@ -982,6 +1014,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t* command_line, int) {
+   } else {
+     if (MakeDirs(data_dir + L"\\Update")) {
+       g_state_path = data_dir + L"\\Update\\state.txt";
++      g_check_path = data_dir + L"\\Update\\check.txt";
+       g_relaunch_path = data_dir + L"\\Update\\relaunch";
+       g_log_path = data_dir + L"\\Update\\update.log";
+       WIN32_FILE_ATTRIBUTE_DATA log_data;
+@@ -994,10 +1027,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t* command_line, int) {
+     std::wstring error;
+     if (!Update(install_dir, release_base, &error)) {
+       Say(L"Update failed: " + error + L".");
+-      WriteState(L"failed " + error);
++      if (g_check) {
++        WriteCheck(L"failed " + error);
++      } else {
++        WriteState(L"failed " + error);
++      }
+       exit_code = 1;
+     }
+-    RelaunchBrowserIfAsked(install_dir);
++    if (!g_check) {
++      RelaunchBrowserIfAsked(install_dir);
++    }
+     ReleaseMutex(mutex);
+   }
+   if (mutex) {
